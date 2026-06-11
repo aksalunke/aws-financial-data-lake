@@ -1,0 +1,24 @@
+2026-06-11 16:23:56,449 | INFO | Starting SEC EDGAR 10-K filing fetch
+2026-06-11 16:23:56,449 | INFO | Target: 5 companies, up to 10 filings each
+2026-06-11 16:23:56,449 | INFO | Fetching filings for JPMorgan Chase (CIK: 0000019617)
+2026-06-11 16:24:41,123 | INFO |   Accepted 10 valid filings for JPMorgan Chase
+2026-06-11 16:24:41,639 | INFO | Fetching filings for Bank of America (CIK: 0000070858)
+2026-06-11 16:24:53,415 | INFO |   Accepted 10 valid filings for Bank of America
+2026-06-11 16:24:53,922 | INFO | Fetching filings for Wells Fargo (CIK: 0000072971)
+2026-06-11 16:24:57,166 | INFO |   Accepted 10 valid filings for Wells Fargo
+2026-06-11 16:24:57,680 | INFO | Fetching filings for Goldman Sachs (CIK: 0000886982)
+2026-06-11 16:25:23,142 | INFO |   Accepted 10 valid filings for Goldman Sachs
+2026-06-11 16:25:23,650 | INFO | Fetching filings for Morgan Stanley (CIK: 0000895421)
+2026-06-11 16:25:52,906 | INFO |   Accepted 10 valid filings for Morgan Stanley
+2026-06-11 16:25:53,407 | INFO | ==================================================
+2026-06-11 16:25:53,407 | INFO | Fetch complete
+2026-06-11 16:25:53,407 | INFO | Total filings saved: 50
+2026-06-11 16:25:53,407 | INFO | Validation failures: 0
+2026-06-11 16:25:53,407 | INFO | Output file: data/sample/financial_filings.csv
+2026-06-11 16:25:53,407 | INFO | ==================================================
+2026-06-11 16:25:53,407 | INFO | Sample records:
+2026-06-11 16:25:53,407 | INFO |   JPMorgan Chase | 2026-02-13 | 10-K
+2026-06-11 16:25:53,407 | INFO |   JPMorgan Chase | 2025-02-14 | 10-K
+2026-06-11 16:25:53,407 | INFO |   JPMorgan Chase | 2024-02-16 | 10-K
+2026-06-11 16:25:53,407 | INFO |   JPMorgan Chase | 2023-02-21 | 10-K
+2026-06-11 16:25:53,407 | INFO |   JPMorgan Chase | 2022-02-22 | 10-K
