@@ -1,0 +1,78 @@
+# infrastructure/cloudformation/glue-catalog.yaml
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Glue Crawler and Data Catalog for Financial Data Lake
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: financial-data-lake
+
+Resources:
+
+  # ── Glue Data Catalog Database ───────────────────────────
+  GlueDatabase:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Name: financial_data_lake
+        Description: Financial Data Lake catalog database
+
+  # ── IAM Role for the Crawler ─────────────────────────────
+  GlueCrawlerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-glue-crawler-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: glue.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole
+      Policies:
+        - PolicyName: S3DataLakeAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub 'arn:aws:s3:::${ProjectName}-raw-${AWS::AccountId}/*'
+                  - !Sub 'arn:aws:s3:::${ProjectName}-raw-${AWS::AccountId}'
+              - Effect: Allow
+                Action:
+                  - kms:Decrypt
+                  - kms:GenerateDataKey
+                Resource: '*'
+
+  # ── Raw Zone Crawler ─────────────────────────────────────
+  RawZoneCrawler:
+    Type: AWS::Glue::Crawler
+    Properties:
+      Name: !Sub '${ProjectName}-raw-crawler'
+      Role: !GetAtt GlueCrawlerRole.Arn
+      DatabaseName: financial_data_lake
+      Targets:
+        S3Targets:
+          - Path: !Sub 's3://${ProjectName}-raw-${AWS::AccountId}/filings/'
+      SchemaChangePolicy:
+        UpdateBehavior: UPDATE_IN_DATABASE
+        DeleteBehavior: LOG
+      Schedule:
+        ScheduleExpression: 'cron(0 6 * * ? *)'
+
+Outputs:
+  GlueDatabaseName:
+    Value: financial_data_lake
+    Export:
+      Name: !Sub '${ProjectName}-glue-database'
+  CrawlerName:
+    Value: !Ref RawZoneCrawler
+    Export:
+      Name: !Sub '${ProjectName}-raw-crawler'
