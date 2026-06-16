@@ -40,11 +40,19 @@ Resources:
               - Effect: Allow
                 Action:
                   - s3:GetObject
-                  - s3:PutObject
                   - s3:ListBucket
                 Resource:
                   - !Sub 'arn:aws:s3:::${ProjectName}-raw-${AWS::AccountId}/*'
                   - !Sub 'arn:aws:s3:::${ProjectName}-raw-${AWS::AccountId}'
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub 'arn:aws:s3:::${ProjectName}-curated-${AWS::AccountId}/*'
+                  - !Sub 'arn:aws:s3:::${ProjectName}-curated-${AWS::AccountId}'
               - Effect: Allow
                 Action:
                   - kms:Decrypt
@@ -75,4 +83,4 @@ Outputs:
   CrawlerName:
     Value: !Ref RawZoneCrawler
     Export:
-      Name: !Sub '${ProjectName}-raw-crawler'
+      Name: !Sub '${ProjectName}-raw-crawler'        
