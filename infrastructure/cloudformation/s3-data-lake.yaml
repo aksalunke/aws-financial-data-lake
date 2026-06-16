@@ -1,0 +1,142 @@
+# infrastructure/cloudformation/s3-data-lake.yaml
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Financial Data Lake - S3 Three-Zone Architecture
+  Raw / Curated / Refined zones with KMS encryption,
+  versioning, and lifecycle rules for cost-optimised
+  data retention.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: financial-data-lake
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, prod]
+
+Resources:
+
+  # ── KMS Key ──────────────────────────────────────────────
+  DataLakeKMSKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: KMS key for Financial Data Lake encryption
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: EnableIAMUserPermissions
+            Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'
+            Action: 'kms:*'
+            Resource: '*'
+
+  DataLakeKMSAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub 'alias/${ProjectName}-key'
+      TargetKeyId: !Ref DataLakeKMSKey
+
+  # ── Raw Zone — immutable, never modified after write ─────
+  RawBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${ProjectName}-raw-${AWS::AccountId}'
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: aws:kms
+              KMSMasterKeyID: !Ref DataLakeKMSKey
+      LifecycleConfiguration:
+        Rules:
+          - Id: TransitionToIA
+            Status: Enabled
+            Transitions:
+              - TransitionInDays: 90
+                StorageClass: STANDARD_IA
+              - TransitionInDays: 365
+                StorageClass: GLACIER
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  # ── Curated Zone — cleaned, Parquet, partitioned by date ─
+  CuratedBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${ProjectName}-curated-${AWS::AccountId}'
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: aws:kms
+              KMSMasterKeyID: !Ref DataLakeKMSKey
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  # ── Refined Zone — aggregated, Athena query-ready ────────
+  RefinedBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${ProjectName}-refined-${AWS::AccountId}'
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: aws:kms
+              KMSMasterKeyID: !Ref DataLakeKMSKey
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  # ── Athena Results Bucket ─────────────────────────────────
+  AthenaResultsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${ProjectName}-athena-results-${AWS::AccountId}'
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: aws:kms
+              KMSMasterKeyID: !Ref DataLakeKMSKey
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteOldResults
+            Status: Enabled
+            ExpirationInDays: 30
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+Outputs:
+  RawBucketName:
+    Value: !Ref RawBucket
+    Export:
+      Name: !Sub '${ProjectName}-raw-bucket'
+  CuratedBucketName:
+    Value: !Ref CuratedBucket
+    Export:
+      Name: !Sub '${ProjectName}-curated-bucket'
+  RefinedBucketName:
+    Value: !Ref RefinedBucket
+    Export:
+      Name: !Sub '${ProjectName}-refined-bucket'
+  KMSKeyArn:
+    Value: !GetAtt DataLakeKMSKey.Arn
+    Export:
+      Name: !Sub '${ProjectName}-kms-key'
