@@ -19,7 +19,27 @@ The refined zone holds aggregated, query-ready datasets.
 A two-zone model loses the ability to re-derive any 
 transformation from the original source.
 
-## 3. Why Athena over Redshift for this use case
+## 3. Raw zone partitioned by filing_date, not ingest date
+
+The raw zone uses filing_date (the SEC submission date) as the
+partition key rather than the date the fetch script was executed.
+
+Trade-off accepted: ingest batch timing is not captured in the
+partition path, making it harder to isolate and reprocess a
+specific fetch batch.
+
+Trade-off avoided: re-running the fetch script overwrites the
+same S3 key rather than creating duplicate partitions. In a
+financial data pipeline, duplicate records are a harder failure
+to detect and correct than a missing batch timestamp. This
+preserves idempotency — the same filing always lands at the
+same path regardless of when it was fetched.
+
+Production extension: a dedicated landing zone partitioned by
+ingest timestamp would sit upstream of the raw zone, capturing
+every batch before deduplication. Deferred for portfolio scope.
+
+## 4. Why Athena over Redshift for this use case
 Athena is serverless — zero cluster management, 
 pay-per-query pricing at $5 per TB scanned, reduced to 
 approximately $0.50 with Parquet and partitioning. 
@@ -31,7 +51,7 @@ Redshift is appropriate when query concurrency exceeds
 20 simultaneous users or complex joins across very large 
 tables require MPP execution.
 
-## 4. Why Lake Formation over IAM-only
+## 5. Why Lake Formation over IAM-only
 S3 bucket policies and IAM policies operate at the 
 object and prefix level — they cannot restrict access 
 to specific columns within a Parquet file. Lake Formation 
@@ -40,7 +60,7 @@ that enforces column-level security at query time in Athena.
 This satisfies GDPR Article 25 (data protection by design) 
 and PCI-DSS Requirement 7 (least privilege access).
 
-## 5. Why Parquet format in the curated zone
+## 6. Why Parquet format in the curated zone
 Parquet is columnar — Athena scans only the columns 
 referenced in a query. A query selecting 3 columns from 
 a 50-column table scans approximately 6% of the data 
@@ -49,7 +69,7 @@ this reduces Athena query costs by 80-95% compared to
 unpartitioned CSV.
 Reference: AWS Athena performance tuning documentation.
 
-## 6. Why Kinesis over MSK for streaming (Project 2 reference)
+## 7. Why Kinesis over MSK for streaming (Project 2 reference)
 Documented here for cross-project consistency. Kinesis 
 is fully managed with no broker administration and 
 integrates natively with Lambda. MSK is appropriate 
