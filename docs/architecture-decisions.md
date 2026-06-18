@@ -20,7 +20,6 @@ A two-zone model loses the ability to re-derive any
 transformation from the original source.
 
 ## 3. Raw zone partitioned by filing_date, not ingest date
-
 The raw zone uses filing_date (the SEC submission date) as the
 partition key rather than the date the fetch script was executed.
 
@@ -39,7 +38,26 @@ Production extension: a dedicated landing zone partitioned by
 ingest timestamp would sit upstream of the raw zone, capturing
 every batch before deduplication. Deferred for portfolio scope.
 
-## 4. Why Athena over Redshift for this use case
+## 4. Single Glue IAM role for crawler and ETL job
+A single IAM role (financial-data-lake-glue-crawler-role) is used
+by both the Glue Crawler and the Glue ETL job.
+
+Trade-off accepted: the role carries broader permissions than the
+crawler alone requires. The crawler only needs read access to the
+raw zone; the combined role also holds write access to the curated
+zone, which the crawler never uses.
+
+Trade-off avoided: managing two separate roles adds deployment
+complexity without meaningful security benefit at portfolio scale
+where both resources are owned and operated by the same team.
+
+Production correction: separate roles should be created —
+one for the crawler (read-only on raw) and one for the ETL job
+(read on raw, write on curated). This enforces least privilege
+precisely and contains the blast radius if either role is
+compromised. Deferred for portfolio scope.
+
+## 5. Why Athena over Redshift for this use case
 Athena is serverless — zero cluster management, 
 pay-per-query pricing at $5 per TB scanned, reduced to 
 approximately $0.50 with Parquet and partitioning. 
@@ -51,7 +69,7 @@ Redshift is appropriate when query concurrency exceeds
 20 simultaneous users or complex joins across very large 
 tables require MPP execution.
 
-## 5. Why Lake Formation over IAM-only
+## 6. Why Lake Formation over IAM-only
 S3 bucket policies and IAM policies operate at the 
 object and prefix level — they cannot restrict access 
 to specific columns within a Parquet file. Lake Formation 
@@ -60,7 +78,7 @@ that enforces column-level security at query time in Athena.
 This satisfies GDPR Article 25 (data protection by design) 
 and PCI-DSS Requirement 7 (least privilege access).
 
-## 6. Why Parquet format in the curated zone
+## 7. Why Parquet format in the curated zone
 Parquet is columnar — Athena scans only the columns 
 referenced in a query. A query selecting 3 columns from 
 a 50-column table scans approximately 6% of the data 
@@ -69,7 +87,7 @@ this reduces Athena query costs by 80-95% compared to
 unpartitioned CSV.
 Reference: AWS Athena performance tuning documentation.
 
-## 7. Why Kinesis over MSK for streaming (Project 2 reference)
+## 8. Why Kinesis over MSK for streaming (Project 2 reference)
 Documented here for cross-project consistency. Kinesis 
 is fully managed with no broker administration and 
 integrates natively with Lambda. MSK is appropriate 
