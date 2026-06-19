@@ -1,0 +1,82 @@
+# infrastructure/cloudformation/iam-roles.yaml
+AWSTemplateFormatVersion: '2010-09-09'
+Description: IAM roles for data lake access personas
+
+Resources:
+
+  # ── Director role — full access to all columns ───────────
+  DirectorRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: data-lake-director
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: AthenaQueryAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - athena:StartQueryExecution
+                  - athena:GetQueryResults
+                  - athena:GetQueryExecution
+                  - glue:GetTable
+                  - glue:GetDatabase
+                  - s3:GetObject
+                  - s3:ListBucket
+                  - s3:PutObject
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - kms:Decrypt
+                  - kms:GenerateDataKey
+                Resource: '*'
+
+  # ── Analyst role — restricted columns via Lake Formation ──
+  AnalystRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: data-lake-analyst
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: AthenaLimitedAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - athena:StartQueryExecution
+                  - athena:GetQueryResults
+                  - athena:GetQueryExecution
+                  - glue:GetTable
+                  - glue:GetDatabase
+                  - s3:GetObject
+                  - s3:ListBucket
+                  - s3:PutObject
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - kms:Decrypt
+                Resource: '*'
+
+Outputs:
+  DirectorRoleArn:
+    Value: !GetAtt DirectorRole.Arn
+    Export:
+      Name: data-lake-director-role-arn
+  AnalystRoleArn:
+    Value: !GetAtt AnalystRole.Arn
+    Export:
+      Name: data-lake-analyst-role-arn

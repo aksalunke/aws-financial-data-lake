@@ -75,6 +75,23 @@ Resources:
       Schedule:
         ScheduleExpression: 'cron(0 6 * * ? *)'
 
+  # ── Curated Zone Crawler ─────────────────────────────────
+  CuratedZoneCrawler:
+    Type: AWS::Glue::Crawler
+    Properties:
+      Name: !Sub '${ProjectName}-curated-crawler'
+      Role: !GetAtt GlueCrawlerRole.Arn
+      DatabaseName: financial_data_lake
+      TablePrefix: 'curated_'
+      Targets:
+        S3Targets:
+          - Path: !Sub 's3://${ProjectName}-curated-${AWS::AccountId}/filings/'
+      SchemaChangePolicy:
+        UpdateBehavior: UPDATE_IN_DATABASE
+        DeleteBehavior: LOG
+      Schedule:
+        ScheduleExpression: 'cron(0 7 * * ? *)'      
+
 Outputs:
   GlueDatabaseName:
     Value: financial_data_lake
@@ -83,4 +100,8 @@ Outputs:
   CrawlerName:
     Value: !Ref RawZoneCrawler
     Export:
-      Name: !Sub '${ProjectName}-raw-crawler'        
+      Name: !Sub '${ProjectName}-raw-crawler'              
+  CuratedCrawlerName:
+    Value: !Ref CuratedZoneCrawler
+    Export:
+      Name: !Sub '${ProjectName}-curated-crawler'     
