@@ -85,3 +85,15 @@ Result confirmed:
 data-lake-analyst SELECT * on curated_filings returns 8 columns (cik_masked and accession_number absent). 
 Admin user with full Select grant returns all 10 columns.
 Column-level governance verified end-to-end.
+
+## Phase 7 — Director role test: no additional fixes required
+
+data-lake-director succeeded on the first query attempt with no permission errors. DirectorRole's original IAM policy already included kms:GenerateDataKey from the initial Phase 6 template,
+unlike AnalystRole which was missing it.
+
+This highlights the practical cost of least-privilege design:
+the more narrowly scoped a role is, the more likely it is to surface missing permissions that a broader role never exposes. DirectorRole's broad access masked four permission gaps that
+only became visible once AnalystRole's restricted policy was tested against the same operations.
+
+Result confirmed: 
+data-lake-director SELECT * on curated_filings returns all 10 columns, including cik_masked and accession_number.
