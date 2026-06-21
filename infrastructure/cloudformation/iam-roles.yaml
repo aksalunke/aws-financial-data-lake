@@ -28,8 +28,10 @@ Resources:
                   - athena:GetQueryExecution
                   - glue:GetTable
                   - glue:GetDatabase
+                  - glue:GetPartitions
                   - s3:GetObject
                   - s3:ListBucket
+                  - s3:GetBucketLocation
                   - s3:PutObject
                 Resource: '*'
               - Effect: Allow
@@ -62,13 +64,16 @@ Resources:
                   - athena:GetQueryExecution
                   - glue:GetTable
                   - glue:GetDatabase
+                  - glue:GetPartitions
                   - s3:GetObject
                   - s3:ListBucket
+                  - s3:GetBucketLocation
                   - s3:PutObject
                 Resource: '*'
               - Effect: Allow
                 Action:
                   - kms:Decrypt
+                  - kms:GenerateDataKey
                 Resource: '*'
 
 Outputs:
