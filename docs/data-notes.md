@@ -57,3 +57,31 @@ tables already exist.
 
 An initial Lake Formation grant was applied giving data-lake-analyst Select access to the raw filings table, before the missing company_standardised column was traced to the curated zone never
 having been crawled. This grant was revoked once permissions were correctly applied to curated_filings instead — leaving it in place would have let the analyst role query the unmasked raw cik column directly, bypassing the governance this phase was built to enforce.
+
+## Phase 7 — Admin user query failed: no Select grant on curated_filings
+
+Running SELECT * as the admin IAM user failed with COLUMN_NOT_FOUND: Relation contains no accessible columns.
+
+Root cause: earlier grants to the admin user (Drop, Alter, Describe) were scoped specifically to fix the table-deletion error in Phase 6. Select was never separately granted. Lake Formation evaluates column access per-permission — having Drop/Alter/Describe does not imply Select. With zero columns authorised, Athena reports the relation as having no accessible columns rather than denying the query outright.
+
+Resolution: granted admin user explicit Select on curated_filings, all columns. Confirms each Lake Formation permission type is independent — no permission implies another, including for an
+account's own administrator.
+
+## Phase 7 — Full permission set required to query a governed, partitioned table
+
+Getting the analyst role to successfully run SELECT * against curated_filings required four separate fixes, each surfaced by a distinct, specific error. IAM and Lake Formation are additive
+systems — a role needs grants in both before any operation succeeds, and each AWS API action used under the hood needs its own explicit permission:
+
+1. kms:GenerateDataKey — required to write encrypted query results to the Athena results bucket. kms:Decrypt alone only covers reading existing encrypted objects.
+2. s3:GetBucketLocation — required for Athena to verify the output bucket exists, separate from GetObject/PutObject/ListBucket which only cover object-level access.
+3. glue:GetPartitions — required to resolve partition metadata for a partitioned table. glue:GetTable only returns schema, not partition listings.
+4. Lake Formation Select grant on curated_filings — required independently of all IAM permissions above; IAM grants access to call the AWS APIs, Lake Formation grants access to the data itself.
+
+Final minimum IAM policy for both AnalystRole and DirectorRole:
+athena:StartQueryExecution, athena:GetQueryResults, athena:GetQueryExecution, glue:GetTable, glue:GetDatabase, glue:GetPartitions, s3:GetObject, s3:ListBucket, s3:GetBucketLocation, s3:PutObject, kms:Decrypt, kms:GenerateDataKey — plus a Lake Formation Select grant scoped
+to the specific table and columns the role should see.
+
+Result confirmed: 
+data-lake-analyst SELECT * on curated_filings returns 8 columns (cik_masked and accession_number absent). 
+Admin user with full Select grant returns all 10 columns.
+Column-level governance verified end-to-end.
