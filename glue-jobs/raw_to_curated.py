@@ -65,18 +65,34 @@ cleaned_df = cleaned_df \
         .otherwise(col("company"))
     )
 
+# 4. Explicit final schema selection
+# Prevents partition columns from the source catalog table
+# (ingest_year, ingest_month) from silently leaking into the
+# curated output. Only columns named here are written downstream.
+final_df = cleaned_df.select(
+    "company",
+    "company_standardised",
+    "form_type",
+    "filing_date",
+    "filing_year",
+    "primary_document",
+    "accession_number",
+    "cik_masked",
+    "year",
+    "month"
+)
 # ── LOAD ──────────────────────────────────────────────────
 # Write to curated zone as Parquet partitioned by year/month
 # Partitioning by year/month means Athena only scans
 # the partitions matching a WHERE clause — reduces cost
 output_path = f"s3://{args['curated_bucket']}/filings/"
 
-cleaned_df.write \
+final_df.write \
     .mode("overwrite") \
     .partitionBy("year", "month") \
     .parquet(output_path)
 
-print(f"Records written to curated zone: {cleaned_df.count()}")
+print(f"Records written to curated zone: {final_df.count()}")
 print(f"Output path: {output_path}")
 
 job.commit()
