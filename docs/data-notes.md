@@ -97,3 +97,12 @@ only became visible once AnalystRole's restricted policy was tested against the 
 
 Result confirmed: 
 data-lake-director SELECT * on curated_filings returns all 10 columns, including cik_masked and accession_number.
+
+## Phase 7 — Unexpected ingest_year/ingest_month columns in curated_filings
+
+curated_filings contained four partition-like columns instead of two: ingest_year, ingest_month (expected only in raw filings) and year, month (expected, computed by the ETL).
+
+Root cause: the ETL reads from the Glue Data Catalog via create_dynamic_frame.from_catalog(), which surfaces a table's partition columns as ordinary DataFrame columns. Since the raw filings table is partitioned by ingest_year/ingest_month, those columns passed through into cleaned_df unchanged and were written into curated Parquet output alongside the newly computed year/month.
+
+Resolution: added explicit final_df.select() with a named 8-column list in raw_to_curated.py, replacing the implicit column carry-through from cleaned_df. Re-ran the Glue job and
+curated crawler. Verified curated_filings now contains exactly the intended schema, and Lake Formation governance continues to function correctly post-fix.
