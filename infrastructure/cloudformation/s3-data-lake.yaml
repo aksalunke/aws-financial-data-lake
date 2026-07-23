@@ -32,7 +32,14 @@ Resources:
               AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'
             Action: 'kms:*'
             Resource: '*'
-
+          - Sid: AllowMacieDecrypt
+            Effect: Allow
+            Principal:
+              AWS: !Sub "arn:aws:iam::${AWS::AccountId}:role/aws-service-role/macie.amazonaws.com/AWSServiceRoleForAmazonMacie"
+            Action:
+              - kms:Decrypt
+              - kms:DescribeKey
+            Resource: "*"
   DataLakeKMSAlias:
     Type: AWS::KMS::Alias
     Properties:
