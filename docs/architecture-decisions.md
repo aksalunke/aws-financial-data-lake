@@ -7,8 +7,8 @@ because it produces real, verifiable financial filing data at no cost and with n
 DMS provides CDC capability to minimise load on a live source database processing transactions. Since this project has no live source database, DMS adds no value and was correctly dropped.
 The EDGAR API fetch script (scripts/edgar_fetch.py) replaces the entire Aurora + DMS layer with a direct HTTP call to a public REST endpoint.
 
-Note: Macie, AWS Backup, and VPC Access Points were also in the original plan but are not yet implemented. These are documented as a planned Project 1 extension — see docs/setup-guide.md for
-the current implemented scope.
+Note: AWS Backup and VPC Access Points were also in the original plan and are documented
+as a planned Project 1 extension. Macie has since been implemented — see ADR #10.
 
 ## 2. Why three S3 zones, not two
 The raw zone is immutable — data is written exactly as ingested and never modified. This satisfies audit trail requirements: regulators can always verify the source data was not altered
@@ -75,20 +75,87 @@ would script all four specific grants using this resource type, leaving only the
 See docs/setup-guide.md Step 8 for the manual sequence.
 
 ## 8. CloudFormation drift detection confirmed IN_SYNC
-All three CloudFormation stacks were checked with aws cloudformation detect-stack-drift after the full build:
+All four CloudFormation stacks were checked with aws cloudformation detect-stack-drift
+after the full build:
 
 - financial-data-lake-s3: IN_SYNC
 - financial-data-lake-glue: IN_SYNC
 - financial-data-lake-iam: IN_SYNC
+- financial-data-lake-macie: DRIFTED (false positive — see below)
 
-This confirms every fix applied during the build — the IAM policy additions (kms:GenerateDataKey, s3:GetBucketLocation, glue:GetPartitions), the TablePrefix correction, the curated crawler addition, and the explicit column selection in the ETL script — was made by editing and redeploying CloudFormation templates, not by ad-hoc console edits that would silently diverge from the committed source of truth.
+The first three stacks confirm every fix applied during the core build — the IAM policy
+additions (kms:GenerateDataKey, s3:GetBucketLocation, glue:GetPartitions), the TablePrefix
+correction, the curated crawler addition, and the explicit column selection in the ETL
+script — was made by editing and redeploying CloudFormation templates, not by ad-hoc
+console edits that would silently diverge from the committed source of truth.
 
-Scope limitation: drift detection only covers resources defined in the templates. Lake Formation permissions and the IAMAllowedPrincipals revocation are account-level and database-level settings outside CloudFormation's resource model — they cannot be drift-checked by this command regardless of
-whether they match documentation. See ADR #7.
+The Macie stack reports DRIFTED due to a CloudFormation/Macie drift detection limitation
+on the AWS::Macie::FindingsFilter resource type. The drift was caused by a console action
+("Suppress findings") that stripped FindingCriteria from the filter. A forced redeployment
+restored FindingCriteria as confirmed by aws macie2 get-findings-filter, which shows the
+resource matches the template exactly. CloudFormation drift detection does not correctly
+reconcile this resource type after a changeset update — the DRIFTED status persists despite
+the resource being correct. Documented as a false positive. See Phase 8 in data-notes.md.
+
+Scope limitation: drift detection only covers resources defined in the templates. Lake
+Formation permissions and the IAMAllowedPrincipals revocation are account-level and
+database-level settings outside CloudFormation's resource model — they cannot be
+drift-checked by this command regardless of whether they match documentation. See ADR #7.
 
 A reusable drift detection script is at: infrastructure/scripts/check-drift.ps1
 
 ## 9. Why Parquet format in the curated zone
 Parquet is columnar — Athena scans only the columns referenced in a query. A query selecting 3 columns from a 50-column table scans approximately 6% of the data versus 100% with CSV. Combined with date partitioning, this reduces Athena query costs by 80-95% compared to unpartitioned CSV.
 Reference: AWS Athena performance tuning documentation.
+
+## 10. Macie classification job excluded from CloudFormation
+The financial-data-lake-macie stack manages three Macie resources via CloudFormation:
+the Macie session (AWS::Macie::Session), the custom CIK data identifier
+(AWS::Macie::CustomDataIdentifier), and the findings filter (AWS::Macie::FindingsFilter).
+
+The classification job — the scan that actually inspects S3 objects for sensitive data —
+is not managed by CloudFormation. No AWS::Macie::ClassificationJob resource type exists.
+The job is created via CLI using aws macie2 create-classification-job after stack deployment.
+
+The stack output CustomDataIdentifierId serves as the explicit handoff between the IaC
+layer and the CLI step — the job creation command consumes this value to connect the
+scan to the custom CIK detection pattern defined in the template.
+
+Trade-off accepted: the classification job is not reproducible via stack teardown and
+redeploy. The job ID is ephemeral and does not persist. A new job must be created via CLI
+after each redeploy.
+
+Trade-off avoided: building a workaround (e.g. CloudFormation custom resource invoking
+a Lambda to call CreateClassificationJob) would add significant complexity for no
+meaningful benefit at portfolio scale.
+
+Production fix: an EventBridge scheduled rule triggering a Lambda function that calls
+CreateClassificationJob on a defined schedule would make job creation operationally
+reproducible without a native CloudFormation resource type. This also enables periodic
+scans rather than a one-time job.
+
+Same category as ADR #7 — an AWS platform constraint on initial setup, not a gap in
+the design.
+
+## 11. Macie EventBridge alerting not configured
+Macie findings currently appear in the console only. No proactive alerting or automated
+remediation is configured. Automated sensitive data discovery runs continuously in the
+background and samples all S3 buckets in the region by default — policy findings are
+generated automatically if bucket configuration changes, but nothing notifies an operator
+when they appear.
+
+Trade-off accepted: findings require manual console review to be actioned. In a production
+environment this is not acceptable — findings would go unnoticed until someone happened
+to open the Macie console.
+
+Trade-off avoided: adding EventBridge + SNS + Lambda for alerting at this stage would
+expand scope before the core Macie proof-of-concept was validated. The finding detection
+story — custom identifier matching CIK patterns in the raw zone — is the primary
+portfolio objective. Alerting is operational infrastructure layered on top of it.
+
+Production fix: an EventBridge rule targeting aws.macie2 events with detail-type
+"Macie Finding" would trigger an SNS notification or Lambda for automated remediation
+such as blocking public access or quarantining an affected object. Severity filtering
+on the EventBridge rule would suppress low-severity findings from generating noise.
+Scoped as a known gap for this project.
 
