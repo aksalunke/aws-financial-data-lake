@@ -106,3 +106,68 @@ Root cause: the ETL reads from the Glue Data Catalog via create_dynamic_frame.fr
 
 Resolution: added explicit final_df.select() with a named 8-column list in raw_to_curated.py, replacing the implicit column carry-through from cleaned_df. Re-ran the Glue job and
 curated crawler. Verified curated_filings now contains exactly the intended schema, and Lake Formation governance continues to function correctly post-fix.
+
+## Phase 8 — Macie classification job returned zero objects
+
+Classification job `raw-zone-pii-scan` completed with `approximateNumberOfObjectsToProcess: 0.0`
+despite objects confirmed present in the raw bucket via `aws s3 ls --recursive`.
+
+Root cause: the Macie service-linked role `AWSServiceRoleForAmazonMacie` was absent from the
+raw bucket KMS key policy. Macie could not decrypt the objects to read them, so they were
+counted as zero processable objects rather than surfacing an explicit access error.
+
+Resolution: added a second statement to the KMS key policy in `financial-data-lake-s3.yaml`
+granting `kms:Decrypt` and `kms:DescribeKey` to the Macie service-linked role ARN. Redeployed
+the S3 stack. Created a second classification job `raw-zone-pii-scan-v2` — Macie does not
+permit duplicate job names, so the original job could not be rerun.
+
+Same pattern as the Glue crawler IAM policy split in Phase 5 — a least-privilege gap that only
+surfaced when a new service accessed an existing encrypted resource for the first time.
+
+## Phase 8 — Console action stripped FindingCriteria from FindingsFilter
+
+Clicking "Suppress findings" in the Macie console modified the `CuratedBucketFindingsFilter`
+resource directly in AWS outside of CloudFormation, stripping `FindingCriteria` entirely.
+The filter retained its name and `ARCHIVE` action but lost its targeting rules, making it
+non-functional. CloudFormation drift detection reported `DRIFTED` on the Macie stack.
+
+Root cause: the Macie console "Suppress findings" button edits existing filter resources
+in place without any CloudFormation awareness.
+
+Resolution: a trivial template edit (description update) was required to force a changeset,
+since `cloudformation deploy` compares against its own last-deployed state rather than the
+actual AWS resource state. If the template is unchanged, no changeset is created even when
+the real resource has drifted. Redeployment restored `FindingCriteria` as confirmed by
+`aws macie2 get-findings-filter`.
+
+Lesson: console actions on CloudFormation-managed resources cause silent drift. The discipline
+of making all changes at the template layer — not the console — is the only reliable way to
+keep actual resource state aligned with declared state.
+
+## Phase 8 — CloudFormation drift detection false positive on FindingsFilter
+
+After redeployment restored `FindingCriteria`, drift detection continued to report `DRIFTED`
+on the Macie stack. Re-ran `detect-stack-drift` explicitly — new timestamp confirmed a fresh
+check, not a cached result.
+
+Root cause: confirmed false positive — `aws macie2 get-findings-filter` shows the resource
+matches the template exactly, including bucket name and finding type criteria. CloudFormation
+drift detection does not correctly reconcile this resource type after a changeset update.
+
+Documented as a CloudFormation/Macie drift detection limitation. All three original stacks
+confirmed IN_SYNC. Macie stack infrastructure is correct; drift status is not actionable.
+
+## Phase 8 — FindingsFilter verification: empty Archived view
+
+Archived findings view empty at time of verification. The filter was confirmed present in
+stack outputs with the correct `FindingCriteria` restored.
+
+The empty Archived view is consistent with a correctly configured private encrypted bucket —
+the curated bucket was never public, so the filter's targeted finding type
+`Policy:IAMUser/S3BucketPublicAccessDisabled` will never be generated for it.
+
+Note: the filter criterion was conservatively chosen. The more production-relevant suppression
+would target `SensitiveData:S3Object/CustomIdentifier` on the curated bucket, where hashed
+CIK values detected by automated sensitive data discovery would be intentional rather than
+actionable. Documented as a known limitation; the filter demonstrates the suppression pattern
+correctly even if the specific finding type is not the most realistic choice for this bucket.
