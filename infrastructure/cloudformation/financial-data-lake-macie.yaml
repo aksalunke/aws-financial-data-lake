@@ -1,0 +1,76 @@
+# financial-data-lake-macie.yaml
+# Stack 4 of 4 — Macie session, custom CIK identifier, and findings filter
+#
+# IaC BOUNDARY NOTE (see ADR #9):
+# This stack manages the Macie session, custom data identifier, and findings
+# filter. The classification job (the actual S3 scan) is created separately
+# via CLI using the CustomDataIdentifierId output below. There is no
+# AWS::Macie::ClassificationJob CloudFormation resource type — the job is
+# API-only via CreateClassificationJob.
+
+Parameters:
+  CuratedBucketName:
+    Type: String
+    Description: >
+      Name of the curated S3 bucket. Used by the FindingsFilter to suppress
+      expected policy findings on that bucket. The raw bucket is targeted
+      at the CLI layer when creating the classification job, not here.
+
+Resources:
+
+  MacieSession:
+    Type: AWS::Macie::Session
+    Properties:
+      Status: ENABLED
+      FindingPublishingFrequency: ONE_HOUR
+
+  CIKCustomDataIdentifier:
+    Type: AWS::Macie::CustomDataIdentifier
+    DependsOn: MacieSession
+    Properties:
+      Name: SEC-CIK-Number
+      Description: >
+        Detects SEC Central Index Key (CIK) numbers — up to 10-digit numeric
+        identifiers used as a stand-in for sensitive account identifiers in
+        the financial data lake pipeline. Pass the output ID of this resource
+        into the create-classification-job CLI command targeting the raw bucket.
+      Regex: '\b[0-9]{1,10}\b'
+      Keywords:
+        - cik
+        - central index key
+      MaximumMatchDistance: 50
+
+  CuratedBucketFindingsFilter:
+    Type: AWS::Macie::FindingsFilter
+    DependsOn: MacieSession
+    Properties:
+      Name: suppress-curated-policy-findings
+      Description: >
+        Suppresses Macie policy findings for the curated bucket. The curated
+        zone contains hashed CIK values by design; policy findings here
+        are expected and not actionable. Restored after console drift
+      Action: ARCHIVE
+      FindingCriteria:
+        Criterion:
+          resourcesAffected.s3Bucket.name:
+            EQ:
+              - !Ref CuratedBucketName
+          type:
+            EQ:
+              - Policy:IAMUser/S3BucketPublicAccessDisabled
+
+Outputs:
+  MacieSessionStatus:
+    Description: Confirms Macie is enabled for the account in this region
+    Value: !Ref MacieSession
+
+  CustomDataIdentifierId:
+    Description: >
+      ID of the CIK custom data identifier. Pass this value into the
+      create-classification-job CLI command as --custom-data-identifier-ids.
+      The raw bucket to scan is specified at the CLI layer, not in this stack.
+    Value: !Ref CIKCustomDataIdentifier
+
+  FindingsFilterId:
+    Description: ID of the findings filter suppressing expected curated bucket findings
+    Value: !Ref CuratedBucketFindingsFilter
