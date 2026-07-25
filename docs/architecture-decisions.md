@@ -7,8 +7,7 @@ because it produces real, verifiable financial filing data at no cost and with n
 DMS provides CDC capability to minimise load on a live source database processing transactions. Since this project has no live source database, DMS adds no value and was correctly dropped.
 The EDGAR API fetch script (scripts/edgar_fetch.py) replaces the entire Aurora + DMS layer with a direct HTTP call to a public REST endpoint.
 
-Note: AWS Backup and VPC Access Points were also in the original plan and are documented
-as a planned Project 1 extension. Macie has since been implemented — see ADR #10.
+Note: macie, AWS Backup and VPC Access Points were also in the original plan and are documented as a planned Project 1 extension. Macie and AWS Backup are now implemented — see ADR #10 and ADR #12. VPC Access Points remain as a planned extension.
 
 ## 2. Why three S3 zones, not two
 The raw zone is immutable — data is written exactly as ingested and never modified. This satisfies audit trail requirements: regulators can always verify the source data was not altered
@@ -75,19 +74,16 @@ would script all four specific grants using this resource type, leaving only the
 See docs/setup-guide.md Step 8 for the manual sequence.
 
 ## 8. CloudFormation drift detection confirmed IN_SYNC
-All four CloudFormation stacks were checked with aws cloudformation detect-stack-drift
+All five CloudFormation stacks were checked with aws cloudformation detect-stack-drift
 after the full build:
 
 - financial-data-lake-s3: IN_SYNC
 - financial-data-lake-glue: IN_SYNC
 - financial-data-lake-iam: IN_SYNC
 - financial-data-lake-macie: DRIFTED (false positive — see below)
+- financial-data-lake-backup: IN_SYNC
 
-The first three stacks confirm every fix applied during the core build — the IAM policy
-additions (kms:GenerateDataKey, s3:GetBucketLocation, glue:GetPartitions), the TablePrefix
-correction, the curated crawler addition, and the explicit column selection in the ETL
-script — was made by editing and redeploying CloudFormation templates, not by ad-hoc
-console edits that would silently diverge from the committed source of truth.
+The first four non-Macie stacks confirm every fix applied during the full build — the IAM policy additions (kms:GenerateDataKey, s3:GetBucketLocation, glue:GetPartitions), the TablePrefix correction, the curated crawler addition, the explicit column selection in the ETL script, and the backup vault, plan, and selection — was made by editing and redeploying CloudFormation templates, not by ad-hoc console edits that would silently diverge from the committed source of truth.
 
 The Macie stack reports DRIFTED due to a CloudFormation/Macie drift detection limitation
 on the AWS::Macie::FindingsFilter resource type. The drift was caused by a console action
@@ -159,3 +155,17 @@ such as blocking public access or quarantining an affected object. Severity filt
 on the EventBridge rule would suppress low-severity findings from generating noise.
 Scoped as a known gap for this project.
 
+## 12. AWS Backup S3 regional opt-in excluded from CloudFormation
+The financial-data-lake-backup stack manages all AWS Backup resources via CloudFormation: the backup vault, vault KMS key, IAM role, backup plan, and backup selection covering all three S3 zones.
+
+One prerequisite sits outside the stack: the S3 service opt-in for AWS Backup is controlled by aws backup update-region-settings, which has no CloudFormation resource type equivalent. This setting must be verified or set via CLI before the backup plan can discover and protect S3 resources through tag-based selection.
+
+Verified state: aws backup describe-region-settings confirmed S3 opt-in was already true in eu-west-2 prior to stack deployment. No update was required.
+
+Nuance: the opt-in is only enforced when AWS Backup uses tag-based resource discovery. The financial-data-lake-backup stack uses explicit ARN-based resource selection in the BackupSelection block — all three zone bucket ARNs are listed directly in the Resources array. The AWS Backup API documentation states that explicitly assigned resource ARNs are included in the backup even if the opt-in is disabled for that service. The opt-in verification step is therefore a hygiene check for this project rather than a functional prerequisite, but is documented because the account-wide setting would affect any future tag-based selection added to this or any other backup plan.
+
+Trade-off accepted: the opt-in state is not captured in the stack template and cannot be drift-checked or reproduced by a stack teardown and redeploy.
+
+Trade-off avoided: building a CloudFormation custom resource to wrap the CLI call would add Lambda and IAM complexity for a one-time account-level setting that is unlikely to change.
+
+Same category as ADR #10 — an AWS platform constraint on initial setup, not a gap in the design.
