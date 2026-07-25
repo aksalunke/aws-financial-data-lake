@@ -1,14 +1,12 @@
 # Data Notes
 
 ## Phase 5 — Raw to Curated ETL
-
 Raw zone: 12 partitions keyed by ingest_year/ingest_month. 
 Curated zone: 12 partitions keyed by year/month.
 
 Partition counts tally exactly, confirming the ETL correctly read each row's filing_date value and wrote it to the corresponding curated partition.
 
 ## Phase 6 — Curated zone schema missing from catalog
-
 While applying Lake Formation column-level permissions, the expected column company_standardised was not available in the Lake Formation console's column selector for the filings table.
 
 Root cause: the Glue Crawler from Phase 4 only crawled the raw zone. The curated zone, where the ETL job writes company_standardised and cik_masked, had never been crawled — so those columns did not exist in the Glue Data Catalog at all.
@@ -16,7 +14,6 @@ Root cause: the Glue Crawler from Phase 4 only crawled the raw zone. The curated
 Resolution: added a second crawler (CuratedZoneCrawler) targeting the curated zone, scheduled one hour after the raw crawler. See ADR #6.
 
 ## Phase 6 — Crawler blocked by Lake Formation after IAMAllowedPrincipals revoke
-
 After revoking IAMAllowedPrincipals on financial_data_lake, the curated zone crawler failed with AccessDeniedException on Describe permission.
 
 Root cause: revoking IAMAllowedPrincipals removed the IAM-only fallback for ALL principals, including the Glue crawler's own IAM role. Lake Formation and IAM are additive — once
@@ -28,7 +25,6 @@ scheduled run of the raw crawler — requires the same Lake Formation grant. The
 Resolution: granted financial-data-lake-glue-crawler-role explicit Lake Formation permissions (Describe/Create table at database level; Alter/Describe/Drop at table level) before re-running.
 
 ## Phase 6 — Curated table registered with auto-generated hash suffix
-
 The curated zone crawler created a table named filings_<hash> instead of a readable name, because Glue detected a naming collision with the existing raw zone filings table and
 auto-resolved it by appending a hash suffix.
 
@@ -36,7 +32,6 @@ Resolution: added TablePrefix: 'curated_' to CuratedZoneCrawler in glue-catalog.
 as curated_filings.
 
 ## Phase 6 — IAMAllowedPrincipals revoke required grants for every principal
-
 Revoking IAMAllowedPrincipals on financial_data_lake affected three distinct principals, each requiring its own explicit Lake Formation grant before operations succeeded:
 
 1. financial-data-lake-glue-crawler-role — needed grants at both database and table level before either crawler could run.
@@ -48,18 +43,15 @@ Lesson: IAMAllowedPrincipals is a single global bypass, not a per-persona settin
 the new personas being introduced. This is the real operational cost of enabling fine-grained governance, more so than the column masking configuration itself.
 
 ## Phase 6 — Crawler role permission residue
-
 financial-data-lake-glue-crawler-role accumulated four Lake Formation grants across this phase: two automatic (full control on each table it created — filings, curated_filings) and two
 manual (ALL_TABLES wildcard, unused Select on curated_filings) added during troubleshooting. Left in place for portfolio scope; production hardening would narrow these to Describe-only once
 tables already exist.
 
 ## Phase 6 — Stale analyst grant on raw table
-
 An initial Lake Formation grant was applied giving data-lake-analyst Select access to the raw filings table, before the missing company_standardised column was traced to the curated zone never
 having been crawled. This grant was revoked once permissions were correctly applied to curated_filings instead — leaving it in place would have let the analyst role query the unmasked raw cik column directly, bypassing the governance this phase was built to enforce.
 
 ## Phase 7 — Admin user query failed: no Select grant on curated_filings
-
 Running SELECT * as the admin IAM user failed with COLUMN_NOT_FOUND: Relation contains no accessible columns.
 
 Root cause: earlier grants to the admin user (Drop, Alter, Describe) were scoped specifically to fix the table-deletion error in Phase 6. Select was never separately granted. Lake Formation evaluates column access per-permission — having Drop/Alter/Describe does not imply Select. With zero columns authorised, Athena reports the relation as having no accessible columns rather than denying the query outright.
@@ -68,7 +60,6 @@ Resolution: granted admin user explicit Select on curated_filings, all columns. 
 account's own administrator.
 
 ## Phase 7 — Full permission set required to query a governed, partitioned table
-
 Getting the analyst role to successfully run SELECT * against curated_filings required four separate fixes, each surfaced by a distinct, specific error. IAM and Lake Formation are additive
 systems — a role needs grants in both before any operation succeeds, and each AWS API action used under the hood needs its own explicit permission:
 
@@ -87,7 +78,6 @@ Admin user with full Select grant returns all 10 columns.
 Column-level governance verified end-to-end.
 
 ## Phase 7 — Director role test: no additional fixes required
-
 data-lake-director succeeded on the first query attempt with no permission errors. DirectorRole's original IAM policy already included kms:GenerateDataKey from the initial Phase 6 template,
 unlike AnalystRole which was missing it.
 
@@ -99,7 +89,6 @@ Result confirmed:
 data-lake-director SELECT * on curated_filings returns all 10 columns, including cik_masked and accession_number.
 
 ## Phase 7 — Unexpected ingest_year/ingest_month columns in curated_filings
-
 curated_filings contained four partition-like columns instead of two: ingest_year, ingest_month (expected only in raw filings) and year, month (expected, computed by the ETL).
 
 Root cause: the ETL reads from the Glue Data Catalog via create_dynamic_frame.from_catalog(), which surfaces a table's partition columns as ordinary DataFrame columns. Since the raw filings table is partitioned by ingest_year/ingest_month, those columns passed through into cleaned_df unchanged and were written into curated Parquet output alongside the newly computed year/month.
@@ -108,7 +97,6 @@ Resolution: added explicit final_df.select() with a named 8-column list in raw_t
 curated crawler. Verified curated_filings now contains exactly the intended schema, and Lake Formation governance continues to function correctly post-fix.
 
 ## Phase 8 — Macie classification job returned zero objects
-
 Classification job `raw-zone-pii-scan` completed with `approximateNumberOfObjectsToProcess: 0.0`
 despite objects confirmed present in the raw bucket via `aws s3 ls --recursive`.
 
@@ -125,7 +113,6 @@ Same pattern as the Glue crawler IAM policy split in Phase 5 — a least-privile
 surfaced when a new service accessed an existing encrypted resource for the first time.
 
 ## Phase 8 — Console action stripped FindingCriteria from FindingsFilter
-
 Clicking "Suppress findings" in the Macie console modified the `CuratedBucketFindingsFilter`
 resource directly in AWS outside of CloudFormation, stripping `FindingCriteria` entirely.
 The filter retained its name and `ARCHIVE` action but lost its targeting rules, making it
@@ -145,7 +132,6 @@ of making all changes at the template layer — not the console — is the only 
 keep actual resource state aligned with declared state.
 
 ## Phase 8 — CloudFormation drift detection false positive on FindingsFilter
-
 After redeployment restored `FindingCriteria`, drift detection continued to report `DRIFTED`
 on the Macie stack. Re-ran `detect-stack-drift` explicitly — new timestamp confirmed a fresh
 check, not a cached result.
@@ -158,7 +144,6 @@ Documented as a CloudFormation/Macie drift detection limitation. All three origi
 confirmed IN_SYNC. Macie stack infrastructure is correct; drift status is not actionable.
 
 ## Phase 8 — FindingsFilter verification: empty Archived view
-
 Archived findings view empty at time of verification. The filter was confirmed present in
 stack outputs with the correct `FindingCriteria` restored.
 
@@ -171,3 +156,43 @@ would target `SensitiveData:S3Object/CustomIdentifier` on the curated bucket, wh
 CIK values detected by automated sensitive data discovery would be intentional rather than
 actionable. Documented as a known limitation; the filter demonstrates the suppression pattern
 correctly even if the specific finding type is not the most realistic choice for this bucket.
+
+
+## Phase 9 — S3 stack updated as backup prerequisite
+Two properties added to all three zone bucket resources in financial-data-lake-s3.yaml before deploying the backup stack:
+
+VersioningConfiguration.Status: Enabled — AWS Backup requires S3 versioning to create recovery points. A missing or suspended versioning state causes the backup job to fail with an explicit error rather than succeeding silently.
+NotificationConfiguration.EventBridgeConfiguration.EventBridgeEnabled: true — AWS Backup creates EventBridge rules (prefixed AwsBackupManagedRule*) to track object changes for continuous backup. The S3 bucket must have EventBridge notifications enabled to send events to those rules.
+
+Both are non-destructive updates — CloudFormation modifies the bucket in place, no recreation. S3 stack redeployed and confirmed IN_SYNC on drift detection.
+
+Note: the Athena results bucket was also missing versioning and was updated at the same time. That bucket is not included in the backup selection — Athena query outputs are ephemeral — but versioning on it causes no harm.
+
+## Phase 9 — Backup stack deployed with placeholder ARNs
+The financial-data-lake-backup stack reached CREATE_COMPLETE on the first deploy because the RawBucketArn, CuratedBucketArn, and RefinedBucketArn parameters were passed the literal placeholder strings from the template comments rather than actual bucket ARNs. CloudFormation accepted the deploy — the parameter values are strings and no validation exists at the template level to require ARN format.
+
+The BackupSelection resource was therefore created pointing at buckets that do not exist.
+
+Resolution: reran cloudformation deploy with the correct ARNs. The update rolled back with UPDATE_ROLLBACK_COMPLETE — the bucket names were passed without the arn:aws:s3::: prefix, producing a 400 from the Backup API: "AWS partition and service vendor code must be specified." A second update with fully-qualified ARNs (arn:aws:s3:::financial-data-lake-raw-ACCOUNTID) succeeded. Stack confirmed UPDATE_COMPLETE.
+
+Lesson: CloudFormation parameter validation does not enforce ARN format unless a constraint pattern is added explicitly. A AllowedPattern constraint on each ARN parameter would have surfaced the malformed value at changeset creation rather than at resource update time.
+
+## Phase 9 — BackupSizeInBytes: 0 on completed recovery points
+All three manual backup jobs completed with Status: COMPLETED but BackupSizeInBytes: 0 on the resulting recovery points in financial-data-lake-vault.
+
+Root cause: not an error. AWS Backup for S3 uses versioning-based recovery points rather than copying bytes into the vault. A recovery point is a catalogue entry recording the versioned state of the bucket at that moment — no data is physically written into the vault, so vault storage consumed is zero. This is S3-specific behaviour; EBS and RDS backups do write physical snapshot data into the vault and would show non-zero sizes.
+
+Confirming evidence: describe-backup-job for each job showed BytesTransferred values above zero (11,617 bytes for the raw zone), confirming the bucket data was actually read by the backup service. BytesTransferred measures data read from the source; BackupSizeInBytes measures incremental vault storage consumed. Both values are correct and consistent.
+
+Status: COMPLETED is the authoritative success indicator for S3 backup jobs, not the size field.
+
+## Phase 9 — Drift detection: all five stacks
+detect-stack-drift run across all five stacks after the full backup build:
+
+financial-data-lake-s3: IN_SYNC
+financial-data-lake-glue: IN_SYNC
+financial-data-lake-iam: IN_SYNC
+financial-data-lake-macie: DRIFTED (pre-existing false positive — see Phase 8)
+financial-data-lake-backup: IN_SYNC
+
+Four stacks IN_SYNC confirms the S3 versioning and EventBridge additions, the full backup stack deployment, and all intermediate fixes were made at the template layer rather than via console. Macie drift status is unchanged from Phase 8 and remains a documented platform limitation, not an actionable gap.

@@ -1,0 +1,113 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Centralised AWS Backup plan for financial data lake S3 zones.
+  Stack: financial-data-lake-backup
+
+Parameters:
+  RawBucketArn:
+    Type: String
+    Description: ARN of the raw S3 zone bucket
+  CuratedBucketArn:
+    Type: String
+    Description: ARN of the curated S3 zone bucket
+  RefinedBucketArn:
+    Type: String
+    Description: ARN of the refined S3 zone bucket
+
+Resources:
+
+  # ── KMS key for backup vault ───────────────────────────────────────────────
+  BackupVaultKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: CMK for financial-data-lake backup vault
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: EnableRootAccess
+            Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'
+            Action: 'kms:*'
+            Resource: '*'
+          - Sid: AllowBackupServiceVaultOperations
+            Effect: Allow
+            Principal:
+              Service: backup.amazonaws.com
+            Action:
+              - kms:GenerateDataKey*
+              - kms:DescribeKey
+              - kms:Decrypt
+              - kms:ReEncrypt*
+            Resource: '*'
+
+  BackupVaultKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: alias/financial-data-lake-backup
+      TargetKeyId: !Ref BackupVaultKey
+
+  # ── Backup vault ──────────────────────────────────────────────────────────
+  DataLakeBackupVault:
+    Type: AWS::Backup::BackupVault
+    Properties:
+      BackupVaultName: financial-data-lake-vault
+      EncryptionKeyArn: !GetAtt BackupVaultKey.Arn
+
+  # ── IAM role for Backup service ───────────────────────────────────────────
+  BackupServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: financial-data-lake-backup-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: backup.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AWSBackupServiceRolePolicyForS3Backup
+        - arn:aws:iam::aws:policy/AWSBackupServiceRolePolicyForS3Restore
+
+  # ── Backup plan ───────────────────────────────────────────────────────────
+  DataLakeBackupPlan:
+    Type: AWS::Backup::BackupPlan
+    Properties:
+      BackupPlan:
+        BackupPlanName: financial-data-lake-backup-plan
+        BackupPlanRule:
+          - RuleName: DailyWithPITR
+            TargetBackupVault: !Ref DataLakeBackupVault
+            ScheduleExpression: 'cron(0 5 * * ? *)'
+            StartWindowMinutes: 60
+            CompletionWindowMinutes: 180
+            EnableContinuousBackup: true
+            Lifecycle:
+              DeleteAfterDays: 35
+
+  # ── Backup selection (explicit ARN, not tag-based) ─────────────────────────
+  DataLakeBackupSelection:
+    Type: AWS::Backup::BackupSelection
+    Properties:
+      BackupPlanId: !Ref DataLakeBackupPlan
+      BackupSelection:
+        SelectionName: financial-data-lake-s3-zones
+        IamRoleArn: !GetAtt BackupServiceRole.Arn
+        Resources:
+          - !Ref RawBucketArn
+          - !Ref CuratedBucketArn
+          - !Ref RefinedBucketArn
+
+Outputs:
+  BackupVaultName:
+    Value: !Ref DataLakeBackupVault
+  BackupVaultArn:
+    Value: !GetAtt DataLakeBackupVault.BackupVaultArn
+  BackupServiceRoleArn:
+    Description: Needed for manual backup job trigger command
+    Value: !GetAtt BackupServiceRole.Arn
+  BackupPlanId:
+    Value: !Ref DataLakeBackupPlan
+    
