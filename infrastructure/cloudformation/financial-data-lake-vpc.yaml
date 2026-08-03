@@ -1,0 +1,256 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  financial-data-lake-vpc - VPC, private subnet, S3 gateway endpoint,
+  Glue security group, and S3 access points for raw, curated, and refined zones.
+  Sub-phase 1 of the VPC Access Points extension.
+
+Parameters:
+
+  ProjectName:
+    Type: String
+    Default: financial-data-lake
+    Description: Project name prefix — must match the value used in all other stacks.
+
+  RawBucketName:
+    Type: String
+    Description: Name of the raw S3 zone bucket (from financial-data-lake-s3 stack).
+
+  CuratedBucketName:
+    Type: String
+    Description: Name of the curated S3 zone bucket (from financial-data-lake-s3 stack).
+
+  RefinedBucketName:
+    Type: String
+    Description: Name of the refined S3 zone bucket (from financial-data-lake-s3 stack).
+
+Resources:
+
+  # ── VPC ─────────────────────────────────────────────────────────────────────
+  # Dedicated VPC for the data lake. No internet gateway or NAT gateway is
+  # provisioned — S3 gateway endpoints route through the route table directly,
+  # not through the internet. The private subnet has no outbound internet path
+  # by design.
+
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-vpc
+
+  # ── SUBNET ──────────────────────────────────────────────────────────────────
+  # Single private subnet in eu-west-2a. One AZ is sufficient for a portfolio
+  # project and matches the AvailabilityZone the Glue Connection (Sub-phase 2)
+  # will reference. MapPublicIpOnLaunch is false — Glue worker ENIs get private
+  # IPs only.
+
+  PrivateSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: eu-west-2a
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-private-subnet
+
+  # ── ROUTE TABLE ─────────────────────────────────────────────────────────────
+  # CloudFormation automatically adds a managed prefix list entry for S3
+  # (pl-xxxxxxxx) to this route table when the gateway endpoint is created,
+  # pointing to the endpoint. No manual route entries required.
+
+  RouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-route-table
+
+  SubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet
+      RouteTableId: !Ref RouteTable
+
+  # ── GLUE SECURITY GROUP ─────────────────────────────────────────────────────
+  # Used by Glue ETL workers and crawlers running in the VPC (Sub-phase 2).
+  #
+  # AWS Glue runs a distributed Spark job across multiple worker nodes. Those
+  # workers communicate with each other continuously during execution — the
+  # driver node coordinates executors, executors shuffle data between themselves.
+  # All workers land in this security group. The self-referencing ingress rule
+  # (all traffic from this SG to itself) is required by Glue: without it, the
+  # Spark workers cannot reach each other and the job fails at initialisation,
+  # before any ETL code runs.
+  #
+  # The self-referencing rule is declared as a separate AWS::EC2::SecurityGroupIngress
+  # resource rather than inline in SecurityGroupIngress. Inline self-references
+  # create a circular dependency that CloudFormation cannot resolve at deploy time.
+
+  GlueSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Glue ETL workers and crawlers for financial data lake VPC
+      VpcId: !Ref VPC
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+          Description: Allow all outbound - S3 routes via gateway endpoint
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-glue-sg
+
+  GlueSecurityGroupSelfIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref GlueSecurityGroup
+      IpProtocol: -1
+      SourceSecurityGroupId: !Ref GlueSecurityGroup
+      Description: Allow inbound within SG for Glue Spark worker communication
+      
+  # ── S3 GATEWAY ENDPOINT ─────────────────────────────────────────────────────
+  # Routes S3 API calls from within the VPC through AWS's private network instead
+  # of the public internet. When Glue workers (Sub-phase 2) make S3 API calls,
+  # the route table directs that traffic to this endpoint. S3 then stamps the
+  # request with this endpoint's ID (vpce-xxxxxxxx) in the aws:SourceVpce
+  # condition key — which the bucket policy enforcement (Sub-phase 3) checks.
+  #
+  # The endpoint policy is a secondary restriction: it limits which S3 resources
+  # can be accessed through this endpoint at all, regardless of IAM permissions.
+  # Traffic from within the VPC cannot reach any S3 bucket outside the data lake
+  # via this endpoint.
+  #
+  # Cost: S3 gateway endpoints are free. No per-hour or per-GB charges apply.
+
+  S3GatewayEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcEndpointType: Gateway
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.s3
+      VpcId: !Ref VPC
+      RouteTableIds:
+        - !Ref RouteTable
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: RestrictToDataLakeBucketsOnly
+            Effect: Allow
+            Principal: '*'
+            Action: 's3:*'
+            Resource:
+              - !Sub arn:aws:s3:::${RawBucketName}
+              - !Sub arn:aws:s3:::${RawBucketName}/*
+              - !Sub arn:aws:s3:::${CuratedBucketName}
+              - !Sub arn:aws:s3:::${CuratedBucketName}/*
+              - !Sub arn:aws:s3:::${RefinedBucketName}
+              - !Sub arn:aws:s3:::${RefinedBucketName}/*
+
+  # ── S3 ACCESS POINTS ────────────────────────────────────────────────────────
+  # One VPC-restricted access point per zone. VpcConfiguration.VpcId causes the
+  # access point to reject any request that does not originate from within the
+  # specified VPC — enforcement at the access point level, independent of the
+  # bucket policy.
+  #
+  # The ETL job and crawler (Sub-phase 2) continue to use s3://bucket-name paths
+  # via from_catalog() — the gateway endpoint intercepts those calls at the
+  # network layer transparently, so no path changes are required in the ETL
+  # script. These access points demonstrate the VPC-restricted access point
+  # pattern and provide the foundation for production-style per-principal
+  # prefix-level delegation via access point policies.
+
+  RawAccessPoint:
+    Type: AWS::S3::AccessPoint
+    Properties:
+      Bucket: !Ref RawBucketName
+      Name: !Sub ${ProjectName}-raw-ap
+      VpcConfiguration:
+        VpcId: !Ref VPC
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  CuratedAccessPoint:
+    Type: AWS::S3::AccessPoint
+    Properties:
+      Bucket: !Ref CuratedBucketName
+      Name: !Sub ${ProjectName}-curated-ap
+      VpcConfiguration:
+        VpcId: !Ref VPC
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  RefinedAccessPoint:
+    Type: AWS::S3::AccessPoint
+    Properties:
+      Bucket: !Ref RefinedBucketName
+      Name: !Sub ${ProjectName}-refined-ap
+      VpcConfiguration:
+        VpcId: !Ref VPC
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+Outputs:
+
+  VPCId:
+    Description: >
+      VPC ID. Referenced by financial-data-lake-glue (Sub-phase 2) for the
+      Glue Connection resource.
+    Value: !Ref VPC
+    Export:
+      Name: !Sub ${ProjectName}-VPCId
+
+  PrivateSubnetId:
+    Description: >
+      Private subnet ID. Referenced by financial-data-lake-glue (Sub-phase 2)
+      for the Glue Connection PhysicalConnectionRequirements.
+    Value: !Ref PrivateSubnet
+    Export:
+      Name: !Sub ${ProjectName}-PrivateSubnetId
+
+  GlueSecurityGroupId:
+    Description: >
+      Security group ID for Glue workers. Referenced by financial-data-lake-glue
+      (Sub-phase 2) for the Glue Connection PhysicalConnectionRequirements.
+    Value: !Ref GlueSecurityGroup
+    Export:
+      Name: !Sub ${ProjectName}-GlueSecurityGroupId
+
+  S3EndpointId:
+    Description: >
+      VPC endpoint ID (vpce-xxxxxxxx). Used as the value in the aws:SourceVpce
+      condition in the financial-data-lake-s3 bucket policy Deny statements
+      (Sub-phase 3).
+    Value: !Ref S3GatewayEndpoint
+    Export:
+      Name: !Sub ${ProjectName}-S3EndpointId
+
+  RawAccessPointArn:
+    Description: ARN of the raw zone VPC-restricted S3 access point.
+    Value: !GetAtt RawAccessPoint.Arn
+    Export:
+      Name: !Sub ${ProjectName}-RawAccessPointArn
+
+  CuratedAccessPointArn:
+    Description: ARN of the curated zone VPC-restricted S3 access point.
+    Value: !GetAtt CuratedAccessPoint.Arn
+    Export:
+      Name: !Sub ${ProjectName}-CuratedAccessPointArn
+
+  RefinedAccessPointArn:
+    Description: ARN of the refined zone VPC-restricted S3 access point.
+    Value: !GetAtt RefinedAccessPoint.Arn
+    Export:
+      Name: !Sub ${ProjectName}-RefinedAccessPointArn
