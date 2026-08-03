@@ -196,3 +196,95 @@ financial-data-lake-macie: DRIFTED (pre-existing false positive — see Phase 8)
 financial-data-lake-backup: IN_SYNC
 
 Four stacks IN_SYNC confirms the S3 versioning and EventBridge additions, the full backup stack deployment, and all intermediate fixes were made at the template layer rather than via console. Macie drift status is unchanged from Phase 8 and remains a documented platform limitation, not an actionable gap.
+
+## Phase 10 — Security group description rejected: invalid character set
+The financial-data-lake-vpc stack failed on the first deploy with: "Invalid security group description. Valid descriptions are strings less than 256 characters from the following set: a-zA-Z0-9. _-:/()#,@[]+=&;{}!$*"
+
+Root cause: the SecurityGroupEgress Description field contained an em dash character (—), which is outside the AWS-accepted character set for security group descriptions. The same restriction applies to GroupDescription and AWS::EC2::SecurityGroupIngress description fields. Note: CloudFormation stack-level Description fields are not subject to this restriction — em dashes in the Description property cause no error but render as ??? in the CloudFormation console, which is cosmetic only.
+
+Resolution: replaced the em dash with a plain hyphen in all security group description fields.
+
+## Phase 10 — Access points orphaned after ROLLBACK_COMPLETE
+The first deploy of financial-data-lake-vpc failed on the security group resource. CloudFormation rolled back to ROLLBACK_COMPLETE. Three S3 access points (raw-ap, curated-ap, refined-ap) were created before the failure and were not deleted during rollback — they survived as orphaned resources outside CloudFormation's control.
+
+Subsequent deploy attempts failed with: "The following hook(s)/validation failed: [AWS::EarlyValidation::ResourceExistenceCheck]" CloudFormation's early validation detected that the access point names were already taken and blocked the deploy before any resources were created.
+
+Resolution: manually delete all three access points via aws s3control delete-access-point, confirm empty AccessPointList, then redeploy. Also required deleting the stuck stack (REVIEW_IN_PROGRESS state) and deploying fresh.
+
+Lesson: resources created before a CloudFormation rollback may survive the rollback. Any resource with a globally or regionally unique name (S3 access points, S3 buckets, IAM roles) must be manually cleaned up before redeploying with the same names.
+
+## Phase 10 — Lake Formation grants required for GlueETLRole
+The first run of the raw-to-curated job after the Glue role split failed with: "AccessDeniedException: Insufficient Lake Formation permission(s): Required Describe on filings"
+
+Root cause: GlueETLRole is a new IAM principal created during the VPC extension. Lake Formation has no grants for a new principal regardless of its IAM permissions — IAM and Lake Formation are evaluated independently. The previous GlueCrawlerRole had accumulated Lake Formation grants over Phase 6 and 7, but those grants do not transfer to the new role.
+
+Resolution: three grants required via aws lakeformation grant-permissions:
+
+DESCRIBE on database financial_data_lake
+DESCRIBE + SELECT on table filings (raw)
+DESCRIBE + SELECT on table curated_filings (curated — needed by curated-to-refined job)
+
+Same root cause as Phase 7 — a new principal touching Lake Formation governed tables for the first time always requires explicit grants regardless of IAM policy. Third occurrence of this pattern in the project. See also Phase 6 (crawler role after IAMAllowedPrincipals revoke) and Phase 8 (Macie SLR absent from KMS key policy).
+
+## Phase 10 — Bucket policy lockout: deployment identity blocked
+After applying aws:SourceVpce enforcement to the raw and curated bucket policies via cloudformation deploy, the next stack update (adding the backup customer role exemption) failed with: "dev-arch-project is not authorized to perform: s3:PutBucketPolicy on resource: financial-data-lake-raw with an explicit deny in a resource-based policy"
+
+Root cause: the bucket policy Deny with Principal: * applies to every identity without exception, including the IAM user running CloudFormation. The deployment identity had no VPC endpoint stamp (CLI requests come from the internet), satisfying the first Deny condition. It was not in the ArnNotLike exemption list, satisfying the second condition. The Deny fired on the s3:PutBucketPolicy call before CloudFormation could apply any update.
+
+The AWS account root user was also blocked — S3 bucket policy Deny statements with Principal: * apply to root. The root user could not view bucket objects in the S3 console until the bucket policy was deleted.
+
+Recovery sequence:
+
+Log in as root in the AWS console
+Delete both bucket policies from the S3 console (S3 bucket -> Permissions -> Bucket policy -> Delete)
+Stack was in UPDATE_ROLLBACK_FAILED at this point — ran: aws cloudformation continue-update-rollback --resources-to-skip RawBucketPolicy CuratedBucketPolicy
+Waited for UPDATE_ROLLBACK_COMPLETE
+Added dev-arch-project to the ArnNotLike exemption list in both bucket policies
+Redeployed successfully
+
+Lesson: the deployment identity must always be in the bucket policy exemption list before applying VPC enforcement. Root being blocked by the bucket policy Deny is the strongest possible evidence the enforcement is genuine — the Deny applies unconditionally regardless of identity or privilege level.
+
+## Phase 10 — AWS Backup requires two separate role exemptions
+Aws Backup start-backup-job failed with: "IAM Role does not have sufficient permissions to execute the backup" after only AWSServiceRoleForBackup was exempted in the bucket policy.
+
+Root cause: AWS Backup S3 jobs use two distinct IAM roles with different functions: AWSServiceRoleForBackup — the AWS-managed service-linked role for orchestration, scheduling, and job management. Runs in AWS service infrastructure. financial-data-lake-backup-role — the customer-managed role that physically reads S3 objects during backup execution. Also runs in AWS service infrastructure.
+
+The initial exemption only covered the SLR. The customer-managed role also makes direct S3 GetObject calls and was blocked by the VPC enforcement Deny.
+
+Resolution: added financial-data-lake-backup-role to the ArnNotLike exemption list in both bucket policies alongside AWSServiceRoleForBackup.
+
+Lesson: AWS Backup is a two-role service. Any bucket policy restricting S3 access by identity must exempt both the SLR and the customer-managed execution role.
+
+## Phase 10 — Macie classification jobs returned 0 objects post-enforcement
+Multiple manual classification jobs triggered after VPC enforcement was applied returned approximateNumberOfObjectsToProcess: 0 and completed in under 10 seconds.
+
+Root cause: Macie's internal deduplication, not an access failure. Once an object version has been classified by any mechanism — a previous manual job or automated discovery — it is not rescanned by a subsequent one-time job unless the object itself changes. The field initialRun: false in the job response confirms this behaviour.
+
+Evidence that Macie access was intact:
+
+aws macie2 describe-buckets showed objectCount: 12 — Macie could enumerate bucket objects, which requires ListObjectsV2 to succeed through the SLR exemption.
+The IAM policy simulator returned EvalDecision: allowed for the Macie SLR on both s3:GetObject and s3:ListBucket. Note: the simulator cannot simulate aws:SourceVpce context — it reaches the correct result for exempted roles because ArnNotLike matches, but cannot confirm VPC routing for non-exempted roles.
+Macie's automated discovery independently generated 12 new findings on the raw bucket after enforcement was applied — the same 12 objects, scanned without any manual trigger. These are duplicate findings (same objects already found in Phase 8) but prove Macie retained access through the policy change.
+
+## Phase 10 — CuratedBucketFindingsFilter drift: second occurrence
+detect-stack-drift on financial-data-lake-macie reported DRIFTED on CuratedBucketFindingsFilter with FindingCriteria nulled to null. No console action was taken. A forced aws cloudformation update-stack restored the stack to UPDATE_COMPLETE but drift detection still reported DRIFTED on the same resource after the update.
+
+This is the second occurrence of this pattern in the project. The first occurred in Phase 8 on the original FindingsFilter after a console action. This second occurrence involved no console action. In both cases: forced redeployment did not resolve the drift status, and aws macie2 list-findings-filters confirmed the filter is active and correctly configured despite the drift report.
+
+There is no AWS documentation specifically citing AWS::Macie::FindingsFilter as having drift detection issues. This is documented as a project-specific empirical observation: CloudFormation cannot reliably reconcile this resource type after updates regardless of whether the deployed state matches the template. The DRIFTED status is not actionable.
+
+## Phase 10 — Athena results written to wrong bucket
+Early Athena verification commands in Sub-phase 2 used: --result-configuration OutputLocation=s3://financial-data-lake-raw-ACCOUNTID/athena-results/
+
+This wrote Athena query results to the raw zone bucket, creating an athena-results/ prefix that violates the raw zone's immutable source data contract. A dedicated financial-data-lake-athena-results bucket exists in the S3 stack and was always the correct destination. The error was an incorrect output location in the verification command.
+
+Cleanup: the athena-results/ prefix was deleted from the raw bucket after VPC enforcement was applied and direct CLI access became blocked. It was deleted while still accessible.
+
+Going forward: all Athena queries use s3://financial-data-lake-athena-results-ACCOUNTID/ as the OutputLocation.
+
+## Phase 10 — Drift detection: all six stacks
+detect-stack-drift run across all six stacks after the full VPC Access Points build:
+
+financial-data-lake-s3: IN_SYNC financial-data-lake-glue: IN_SYNC financial-data-lake-iam: IN_SYNC financial-data-lake-macie: DRIFTED (second occurrence of FindingsFilter false positive — see above) financial-data-lake-backup: IN_SYNC financial-data-lake-vpc: IN_SYNC
+
+Five stacks IN_SYNC confirms the VPC infrastructure, Glue role split, scripts bucket, curated-to-refined job, refined zone crawler, and bucket policy enforcement were all made at the template layer. Macie drift status is a repeated platform limitation, not an actionable gap.
