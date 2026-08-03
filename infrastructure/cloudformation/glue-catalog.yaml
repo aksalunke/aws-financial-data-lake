@@ -1,15 +1,43 @@
 # infrastructure/cloudformation/glue-catalog.yaml
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Glue Crawler and Data Catalog for Financial Data Lake
+Description: >
+  financial-data-lake-glue - Glue catalog, IAM roles, VPC connection,
+  ETL jobs, crawlers, and dedicated scripts bucket.
+  Updated for VPC Access Points extension (Sub-phase 2).
 
 Parameters:
   ProjectName:
     Type: String
     Default: financial-data-lake
+    Description: Project name prefix — must match the value used in all other stacks.
 
 Resources:
 
-  # ── Glue Data Catalog Database ───────────────────────────
+  # ── SCRIPTS BUCKET ──────────────────────────────────────────────────────────
+  # Dedicated bucket for Glue ETL scripts. Separated from the raw zone because
+  # the raw zone's architectural contract is immutable source data only. Mixing
+  # scripts with ingested data violates that boundary and caused Macie to scan
+  # scripts alongside data objects (documented in Phase 8 data-notes). SSE-S3
+  # encryption is sufficient — scripts are not sensitive data and do not require
+  # the CMK used on the three data zones. Versioning enabled so script rollbacks
+  # are possible without a re-deploy.
+  ScriptsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${ProjectName}-scripts-${AWS::AccountId}'
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      VersioningConfiguration:
+        Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  # ── GLUE DATA CATALOG DATABASE ──────────────────────────────────────────────
   GlueDatabase:
     Type: AWS::Glue::Database
     Properties:
@@ -18,7 +46,12 @@ Resources:
         Name: financial_data_lake
         Description: Financial Data Lake catalog database
 
-  # ── IAM Role for the Crawler ─────────────────────────────
+  # ── IAM ROLE — CRAWLERS ─────────────────────────────────────────────────────
+  # Read-only across all three data zones. Curated write access removed — the
+  # original role had it because the same role served both crawlers and the ETL
+  # job. Now that roles are split, the crawler role only has the permissions it
+  # actually uses. This resolves the least-privilege gap documented in the
+  # interview walkthrough.
   GlueCrawlerRole:
     Type: AWS::IAM::Role
     Properties:
@@ -33,33 +66,187 @@ Resources:
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole
       Policies:
-        - PolicyName: S3DataLakeAccess
+        - PolicyName: S3DataLakeReadOnly
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
-              - Effect: Allow
+              - Sid: RawZoneRead
+                Effect: Allow
                 Action:
                   - s3:GetObject
                   - s3:ListBucket
                 Resource:
-                  - !Sub 'arn:aws:s3:::${ProjectName}-raw-${AWS::AccountId}/*'
                   - !Sub 'arn:aws:s3:::${ProjectName}-raw-${AWS::AccountId}'
-              - Effect: Allow
+                  - !Sub 'arn:aws:s3:::${ProjectName}-raw-${AWS::AccountId}/*'
+              - Sid: CuratedZoneRead
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub 'arn:aws:s3:::${ProjectName}-curated-${AWS::AccountId}'
+                  - !Sub 'arn:aws:s3:::${ProjectName}-curated-${AWS::AccountId}/*'
+              - Sid: RefinedZoneRead
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub 'arn:aws:s3:::${ProjectName}-refined-${AWS::AccountId}'
+                  - !Sub 'arn:aws:s3:::${ProjectName}-refined-${AWS::AccountId}/*'
+              - Sid: KMSDecrypt
+                Effect: Allow
+                Action:
+                  - kms:Decrypt
+                  - kms:GenerateDataKey
+                Resource: '*'
+
+  # ── IAM ROLE — ETL JOBS ─────────────────────────────────────────────────────
+  # Separate role for the two ETL jobs. Raw read, curated and refined write,
+  # scripts bucket read. Crawlers use GlueCrawlerRole and cannot write to any
+  # data zone. ETL jobs use this role and cannot access anything outside the
+  # three data zones and the scripts bucket.
+  GlueETLRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-glue-etl-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: glue.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole
+      Policies:
+        - PolicyName: S3DataLakeETLAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: RawZoneRead
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub 'arn:aws:s3:::${ProjectName}-raw-${AWS::AccountId}'
+                  - !Sub 'arn:aws:s3:::${ProjectName}-raw-${AWS::AccountId}/*'
+              - Sid: CuratedZoneWrite
+                Effect: Allow
                 Action:
                   - s3:GetObject
                   - s3:PutObject
                   - s3:DeleteObject
                   - s3:ListBucket
                 Resource:
-                  - !Sub 'arn:aws:s3:::${ProjectName}-curated-${AWS::AccountId}/*'
                   - !Sub 'arn:aws:s3:::${ProjectName}-curated-${AWS::AccountId}'
-              - Effect: Allow
+                  - !Sub 'arn:aws:s3:::${ProjectName}-curated-${AWS::AccountId}/*'
+              - Sid: RefinedZoneWrite
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub 'arn:aws:s3:::${ProjectName}-refined-${AWS::AccountId}'
+                  - !Sub 'arn:aws:s3:::${ProjectName}-refined-${AWS::AccountId}/*'
+              - Sid: ScriptsBucketRead
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:ListBucket
+                Resource:
+                  - !GetAtt ScriptsBucket.Arn
+                  - !Sub '${ScriptsBucket.Arn}/*'
+              - Sid: KMSAccess
+                Effect: Allow
                 Action:
                   - kms:Decrypt
                   - kms:GenerateDataKey
                 Resource: '*'
 
-  # ── Raw Zone Crawler ─────────────────────────────────────
+  # ── GLUE VPC CONNECTION ─────────────────────────────────────────────────────
+  # Causes Glue ETL job workers to spin up with ENIs inside the data lake VPC
+  # subnet. Their S3 API calls then route through the subnet route table and
+  # through the S3 gateway endpoint, carrying aws:SourceVpce in the request
+  # context — which the Sub-phase 3 bucket policy Deny statement checks.
+  # Crawlers are not associated with this connection: they run metadata
+  # discovery only and are exempted by role ARN in the Sub-phase 3 bucket
+  # policy alongside the Macie and Backup service-linked roles.
+  GlueVPCConnection:
+    Type: AWS::Glue::Connection
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      ConnectionInput:
+        Name: !Sub '${ProjectName}-vpc-connection'
+        ConnectionType: NETWORK
+        ConnectionProperties: {}
+        PhysicalConnectionRequirements:
+          SubnetId: !ImportValue 'financial-data-lake-PrivateSubnetId'
+          SecurityGroupIdList:
+            - !ImportValue 'financial-data-lake-GlueSecurityGroupId'
+          AvailabilityZone: eu-west-2a
+
+  # ── GLUE JOB — RAW TO CURATED ───────────────────────────────────────────────
+  # Previously created via CLI. Now managed by CloudFormation — the CLI job
+  # must be deleted before this stack update deploys to avoid a name collision.
+  # ScriptLocation now points to the scripts bucket, not the raw zone bucket.
+  RawToCuratedJob:
+    Type: AWS::Glue::Job
+    Properties:
+      Name: !Sub '${ProjectName}-raw-to-curated'
+      Role: !GetAtt GlueETLRole.Arn
+      GlueVersion: '3.0'
+      WorkerType: G.1X
+      NumberOfWorkers: 2
+      Command:
+        Name: glueetl
+        ScriptLocation: !Sub 's3://${ScriptsBucket}/raw_to_curated.py'
+        PythonVersion: '3'
+      DefaultArguments:
+        '--raw_bucket': !Sub '${ProjectName}-raw-${AWS::AccountId}'
+        '--curated_bucket': !Sub '${ProjectName}-curated-${AWS::AccountId}'
+        '--job-bookmark-option': 'job-bookmark-disable'
+        '--enable-metrics': 'true'
+        '--enable-continuous-cloudwatch-log': 'true'
+      Connections:
+        Connections:
+          - !Ref GlueVPCConnection
+      MaxRetries: 0
+
+  # ── GLUE JOB — CURATED TO REFINED ───────────────────────────────────────────
+  # Second ETL job in the pipeline. Reads curated individual records and writes
+  # two aggregated Parquet tables to the refined zone: filings_by_company_year
+  # and filings_by_year. Neither output carries cik_masked or accession_number
+  # — those identifiers have no meaning in a grouped output. The refined zone
+  # requires no column-level Lake Formation restriction or VPC bucket policy
+  # enforcement as a result.
+  CuratedToRefinedJob:
+    Type: AWS::Glue::Job
+    Properties:
+      Name: !Sub '${ProjectName}-curated-to-refined'
+      Role: !GetAtt GlueETLRole.Arn
+      GlueVersion: '3.0'
+      WorkerType: G.1X
+      NumberOfWorkers: 2
+      Command:
+        Name: glueetl
+        ScriptLocation: !Sub 's3://${ScriptsBucket}/curated_to_refined.py'
+        PythonVersion: '3'
+      DefaultArguments:
+        '--refined_bucket': !Sub '${ProjectName}-refined-${AWS::AccountId}'
+        '--job-bookmark-option': 'job-bookmark-disable'
+        '--enable-metrics': 'true'
+        '--enable-continuous-cloudwatch-log': 'true'
+      Connections:
+        Connections:
+          - !Ref GlueVPCConnection
+      MaxRetries: 0
+
+  # ── CRAWLERS ─────────────────────────────────────────────────────────────────
+
   RawZoneCrawler:
     Type: AWS::Glue::Crawler
     Properties:
@@ -75,7 +262,6 @@ Resources:
       Schedule:
         ScheduleExpression: 'cron(0 6 * * ? *)'
 
-  # ── Curated Zone Crawler ─────────────────────────────────
   CuratedZoneCrawler:
     Type: AWS::Glue::Crawler
     Properties:
@@ -90,18 +276,80 @@ Resources:
         UpdateBehavior: UPDATE_IN_DATABASE
         DeleteBehavior: LOG
       Schedule:
-        ScheduleExpression: 'cron(0 7 * * ? *)'      
+        ScheduleExpression: 'cron(0 7 * * ? *)'
+
+  # Crawls both refined output prefixes. TablePrefix 'refined_' produces
+  # two catalog tables: refined_filings_by_company_year and
+  # refined_filings_by_year. No schedule — run manually after each
+  # curated-to-refined job execution.
+  RefinedZoneCrawler:
+    Type: AWS::Glue::Crawler
+    Properties:
+      Name: !Sub '${ProjectName}-refined-crawler'
+      Role: !GetAtt GlueCrawlerRole.Arn
+      DatabaseName: financial_data_lake
+      TablePrefix: 'refined_'
+      Targets:
+        S3Targets:
+          - Path: !Sub 's3://${ProjectName}-refined-${AWS::AccountId}/filings_by_company_year/'
+          - Path: !Sub 's3://${ProjectName}-refined-${AWS::AccountId}/filings_by_year/'
+      SchemaChangePolicy:
+        UpdateBehavior: UPDATE_IN_DATABASE
+        DeleteBehavior: LOG
 
 Outputs:
+
   GlueDatabaseName:
     Value: financial_data_lake
     Export:
       Name: !Sub '${ProjectName}-glue-database'
-  CrawlerName:
+
+  ScriptsBucketName:
+    Value: !Ref ScriptsBucket
+    Export:
+      Name: !Sub '${ProjectName}-scripts-bucket'
+
+  GlueETLRoleArn:
+    Description: >
+      ETL role ARN. Needed for Sub-phase 3 bucket policy exemption — the ETL
+      role accesses raw and curated via the VPC endpoint, but Glue loads the
+      job script from the scripts bucket using its service infrastructure
+      before the VPC workers start. The scripts bucket has no VPC enforcement
+      so no exemption is needed there.
+    Value: !GetAtt GlueETLRole.Arn
+    Export:
+      Name: !Sub '${ProjectName}-glue-etl-role-arn'
+
+  GlueCrawlerRoleArn:
+    Description: >
+      Crawler role ARN. Needed for Sub-phase 3 bucket policy exemption —
+      crawlers run in AWS-managed infrastructure and are not associated with
+      the VPC connection.
+    Value: !GetAtt GlueCrawlerRole.Arn
+    Export:
+      Name: !Sub '${ProjectName}-glue-crawler-role-arn'
+
+  RawCrawlerName:
     Value: !Ref RawZoneCrawler
     Export:
-      Name: !Sub '${ProjectName}-raw-crawler'              
+      Name: !Sub '${ProjectName}-raw-crawler'
+
   CuratedCrawlerName:
     Value: !Ref CuratedZoneCrawler
     Export:
-      Name: !Sub '${ProjectName}-curated-crawler'     
+      Name: !Sub '${ProjectName}-curated-crawler'
+
+  RefinedCrawlerName:
+    Value: !Ref RefinedZoneCrawler
+    Export:
+      Name: !Sub '${ProjectName}-refined-crawler'
+
+  RawToCuratedJobName:
+    Value: !Ref RawToCuratedJob
+    Export:
+      Name: !Sub '${ProjectName}-raw-to-curated-job'
+
+  CuratedToRefinedJobName:
+    Value: !Ref CuratedToRefinedJob
+    Export:
+      Name: !Sub '${ProjectName}-curated-to-refined-job'

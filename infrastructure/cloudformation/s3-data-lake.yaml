@@ -76,6 +76,45 @@ Resources:
         EventBridgeConfiguration:
           EventBridgeEnabled: true
 
+  # ── Raw Zone Bucket Policy — VPC enforcement ─────────────
+  # Denies any request that does not carry the VPC endpoint stamp AND
+  # is not from one of three exempted roles. Both conditions must be
+  # true for the Deny to fire — if either is false the request is allowed.
+  #
+  # Exempted roles:
+  #   Macie SLR   — scans raw zone from AWS service infrastructure
+  #   Backup SLR  — backs up all zones from AWS service infrastructure
+  #   Crawler role — runs in AWS-managed infrastructure without VPC connection
+  #
+  # Not exempted:
+  #   Glue ETL role — runs inside the VPC, requests carry aws:SourceVpce.
+  #   A successful ETL job run after this policy is applied is proof that
+  #   VPC routing is working correctly end-to-end.
+  RawBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref RawBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyNonVPCAccess
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource:
+              - !GetAtt RawBucket.Arn
+              - !Sub '${RawBucket.Arn}/*'
+            Condition:
+              StringNotEquals:
+                aws:SourceVpce: !ImportValue 'financial-data-lake-S3EndpointId'
+              ArnNotLike:
+                aws:PrincipalArn:
+                  - !Sub 'arn:aws:iam::${AWS::AccountId}:role/aws-service-role/macie.amazonaws.com/AWSServiceRoleForAmazonMacie'
+                  - !Sub 'arn:aws:iam::${AWS::AccountId}:role/aws-service-role/backup.amazonaws.com/AWSServiceRoleForBackup'
+                  - !Sub 'arn:aws:iam::${AWS::AccountId}:role/${ProjectName}-glue-crawler-role'
+                  - !Sub 'arn:aws:iam::${AWS::AccountId}:role/${ProjectName}-backup-role'
+                  - !Sub 'arn:aws:iam::${AWS::AccountId}:user/dev-arch-project'
+
   # ── Curated Zone — cleaned, Parquet, partitioned by date ─
   CuratedBucket:
     Type: AWS::S3::Bucket
@@ -97,7 +136,39 @@ Resources:
         EventBridgeConfiguration:
           EventBridgeEnabled: true
 
+  # ── Curated Zone Bucket Policy — VPC enforcement ─────────
+  # Identical enforcement pattern to the raw zone. Same three exemptions
+  # for the same reasons. Refined zone has no enforcement — Athena queries
+  # the refined zone and cannot route through the VPC endpoint.
+  CuratedBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref CuratedBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyNonVPCAccess
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource:
+              - !GetAtt CuratedBucket.Arn
+              - !Sub '${CuratedBucket.Arn}/*'
+            Condition:
+              StringNotEquals:
+                aws:SourceVpce: !ImportValue 'financial-data-lake-S3EndpointId'
+              ArnNotLike:
+                aws:PrincipalArn:
+                  - !Sub 'arn:aws:iam::${AWS::AccountId}:role/aws-service-role/macie.amazonaws.com/AWSServiceRoleForAmazonMacie'
+                  - !Sub 'arn:aws:iam::${AWS::AccountId}:role/aws-service-role/backup.amazonaws.com/AWSServiceRoleForBackup'
+                  - !Sub 'arn:aws:iam::${AWS::AccountId}:role/${ProjectName}-glue-crawler-role'
+                  - !Sub 'arn:aws:iam::${AWS::AccountId}:role/${ProjectName}-backup-role'
+                  - !Sub 'arn:aws:iam::${AWS::AccountId}:user/dev-arch-project'
+
   # ── Refined Zone — aggregated, Athena query-ready ────────
+  # No bucket policy. Athena queries this zone and cannot route through
+  # the VPC endpoint. The refined zone contains only aggregated outputs
+  # with no sensitive identifiers — identity controls (IAM) are sufficient.
   RefinedBucket:
     Type: AWS::S3::Bucket
     Properties:
@@ -117,7 +188,6 @@ Resources:
       NotificationConfiguration:
         EventBridgeConfiguration:
           EventBridgeEnabled: true
-      
 
   # ── Athena Results Bucket ─────────────────────────────────
   AthenaResultsBucket:
