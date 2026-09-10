@@ -1,0 +1,24 @@
+SYNTHETIC TEST FIXTURE — NOT A REAL FILING
+
+This document is a synthetic test fixture created for the AWS Financial
+Data Lake project's governed RAG extension. It does not describe a real
+company, a real filing, or real financial data of any kind. It exists
+solely to verify that content tagged permission_level: restricted is
+correctly excluded from retrieval results returned to the analyst
+persona, and correctly included for the director persona.
+
+Fictional entity name: Placeholder Holdings Beta Inc.
+Fictional identifier: SYNTHETIC-CIK-0000000002
+Fictional accession reference: SYNTHETIC-0000000002-00-000001
+
+For test-query purposes, this fixture discusses a fictional internal
+designation referred to as Project Thistlewood. Placeholder Holdings
+Beta Inc. describes Project Thistlewood as an internal restructuring
+initiative with a fictional completion target of Q3 of fiscal year 9999.
+No real corporate initiative, product, or transaction of this name exists.
+
+This paragraph exists to give the fixture enough distinctive, retrievable
+text that a semantic search for "Project Thistlewood" or "Placeholder
+Holdings Beta" would plausibly return this chunk if permission filtering
+were not applied. If a query using either term, issued under the analyst
+persona, ever returns this content, the deny path has failed.
