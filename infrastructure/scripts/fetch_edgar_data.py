@@ -39,7 +39,7 @@ COMPANIES = {
 # Without this the API returns 403 Forbidden
 # Reference: https://www.sec.gov/os/accessing-edgar-data
 HEADERS = {
-    "User-Agent": "Portfolio Project aksha@email.com"
+    "User-Agent": "Portfolio Project your-email@example.com"
 }
 
 # How many annual reports to fetch per company
