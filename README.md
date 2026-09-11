@@ -39,24 +39,17 @@ This is the actual operational cost of column-level governance — not the colum
 every existing principal once the IAM bypass is removed. A production rollout of Lake Formation needs to budget for this: identify every role and service that currently touches the catalog
 *before* revoking `IAMAllowedPrincipals`, and have their grants ready in advance — rather than discovering each one through a failed operation, as happened during this build.
 
-
 ## AWS Services Used
 - **Ingestion:** SEC EDGAR public API (Python fetch script)
-- **Storage:** Amazon S3 (three-zone: raw / curated / refined)
-- **Cataloguing:** AWS Glue Crawler (raw + curated), AWS Glue Data Catalog
-- **Transformation:** AWS Glue ETL job (PySpark)
+- **Storage:** Amazon S3 (three-zone: raw / curated / refined), dedicated scripts bucket
+- **Cataloguing:** AWS Glue Crawlers (raw, curated, refined), AWS Glue Data Catalog
+- **Transformation:** AWS Glue ETL jobs (PySpark) — raw-to-curated (masking, standardisation) and   curated-to-refined (aggregation)
 - **Governance:** AWS Lake Formation (column-level access control)
-- **Security:** AWS KMS (SSE encryption at rest), AWS IAM
+- **Security:** AWS KMS (SSE-KMS encryption at rest), AWS IAM (separate roles per function — crawler, ETL, director, analyst), Amazon Macie (automated PII discovery via a custom CIK data identifier)
+- **Resilience:** AWS Backup (daily plan, point-in-time recovery, dedicated vault across all three zones)
+- **Networking:** Amazon VPC (private subnet, S3 Gateway Endpoint, VPC-restricted S3 Access Points enforcing raw and curated zone access)
 - **Query:** Amazon Athena
-- **IaC:** AWS CloudFormation (3 stacks, drift detection confirmed)
-
-## Project 1 Extension (in progress)
-The following services are scoped to this project and will be
-implemented in the next build phase:
-- Amazon Macie — automated PII scanning on S3 buckets
-- AWS Backup — centralised backup plan across data lake zones
-- S3 VPC Access Points — network-layer S3 restriction,
-  preventing public internet data path
+- **IaC:** AWS CloudFormation (6 stacks: s3, glue, iam, macie, backup, vpc — drift detection confirmed IN_SYNC on 5 of 6; Macie stack shows a documented false-positive drift, see ADR #8)
 
 ## Data Source
 SEC EDGAR public API — quarterly 10-K and 10-Q financial filings from five major US financial institutions. Free, no authentication required.
@@ -79,9 +72,9 @@ See [docs/architecture-decisions.md](docs/architecture-decisions.md)
 See [docs/setup-guide.md](docs/setup-guide.md)
 
 ## Estimated AWS Cost
-Running this project at portfolio scale with small dataset: under $15/month. Destroy all resources after each session using the teardown script to minimise cost.
+Under $5 for a full build-test-teardown cycle (see `docs/setup-guide.md` for the itemized breakdown). If resources are left running, the only meaningful ongoing cost is ~$2/month for the two KMS CMKs. Destroy all resources after each session using the teardown script to avoid that charge accumulating.
 
 ## Author
-Akshay | AWS Solutions Architect | 
+Akshay Salunke| AWS Solutions Architect | 
 MSc Financial Technology | 
 [LinkedIn]https://linkedin.com/in/akshayksalunke
