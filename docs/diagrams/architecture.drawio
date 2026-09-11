@@ -1,0 +1,255 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mxfile host="app.diagrams.net" version="24.7.5">
+  <diagram id="aws-fdl-architecture" name="AWS Financial Data Lake">
+    <mxGraphModel dx="1200" dy="900" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="850" pageHeight="1200" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <!-- ══ VPC BOUNDARIES (drawn first so ETL boxes render on top) ══ -->
+
+        <mxCell id="vpc1" value="VPC — private subnet — eu-west-2a"
+          style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#185FA5;dashed=1;strokeWidth=2;verticalAlign=top;fontSize=10;fontStyle=1;fontColor=#185FA5;"
+          vertex="1" parent="1">
+          <mxGeometry x="190" y="188" width="268" height="124" as="geometry" />
+        </mxCell>
+
+        <mxCell id="vpc2" value="same VPC — S3 gateway endpoint"
+          style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#185FA5;dashed=1;strokeWidth=2;verticalAlign=top;fontSize=10;fontStyle=1;fontColor=#185FA5;"
+          vertex="1" parent="1">
+          <mxGeometry x="190" y="432" width="268" height="124" as="geometry" />
+        </mxCell>
+
+        <!-- ══ EXTERNAL SOURCE ══ -->
+
+        <mxCell id="edgar" value="&lt;b&gt;SEC EDGAR API&lt;/b&gt;"
+          style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#999999;fontColor=#333333;fontSize=12;"
+          vertex="1" parent="1">
+          <mxGeometry x="207" y="20" width="232" height="44" as="geometry" />
+        </mxCell>
+
+        <!-- ══ S3 ZONES ══ -->
+
+        <mxCell id="raw" value="&lt;b&gt;S3 raw zone&lt;/b&gt;&lt;br&gt;CSV | KMS | VPC-enforced"
+          style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontColor=#2d6a2d;fontSize=11;"
+          vertex="1" parent="1">
+          <mxGeometry x="207" y="112" width="232" height="56" as="geometry" />
+        </mxCell>
+
+        <mxCell id="etl1" value="&lt;b&gt;Glue ETL — raw_to_curated.py&lt;/b&gt;&lt;br&gt;CIK masked | schema enforced"
+          style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d6b656;fontColor=#7d4e00;fontSize=11;"
+          vertex="1" parent="1">
+          <mxGeometry x="207" y="216" width="232" height="56" as="geometry" />
+        </mxCell>
+
+        <mxCell id="curated" value="&lt;b&gt;S3 curated zone&lt;/b&gt;&lt;br&gt;Parquet | KMS | VPC-enforced"
+          style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontColor=#2d6a2d;fontSize=11;"
+          vertex="1" parent="1">
+          <mxGeometry x="207" y="358" width="232" height="56" as="geometry" />
+        </mxCell>
+
+        <mxCell id="etl2" value="&lt;b&gt;Glue ETL — curated_to_refined.py&lt;/b&gt;&lt;br&gt;filing aggregations by period"
+          style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d6b656;fontColor=#7d4e00;fontSize=11;"
+          vertex="1" parent="1">
+          <mxGeometry x="207" y="460" width="232" height="56" as="geometry" />
+        </mxCell>
+
+        <mxCell id="refined" value="&lt;b&gt;S3 refined zone&lt;/b&gt;&lt;br&gt;Parquet | KMS | identity controls"
+          style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontColor=#2d6a2d;fontSize=11;"
+          vertex="1" parent="1">
+          <mxGeometry x="207" y="574" width="232" height="56" as="geometry" />
+        </mxCell>
+
+        <!-- ══ ANALYTICS STACK ══ -->
+
+        <mxCell id="catalog" value="&lt;b&gt;Glue data catalog&lt;/b&gt;&lt;br&gt;financial_data_lake database"
+          style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d6b656;fontColor=#7d4e00;fontSize=11;"
+          vertex="1" parent="1">
+          <mxGeometry x="207" y="678" width="232" height="56" as="geometry" />
+        </mxCell>
+
+        <mxCell id="lf" value="&lt;b&gt;Lake Formation&lt;/b&gt;&lt;br&gt;column-level access control"
+          style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontColor=#8b1a1a;fontSize=11;"
+          vertex="1" parent="1">
+          <mxGeometry x="207" y="782" width="232" height="56" as="geometry" />
+        </mxCell>
+
+        <mxCell id="athena" value="&lt;b&gt;Amazon Athena&lt;/b&gt;&lt;br&gt;queries refined zone"
+          style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontColor=#0b3e82;fontSize=11;"
+          vertex="1" parent="1">
+          <mxGeometry x="207" y="886" width="232" height="56" as="geometry" />
+        </mxCell>
+
+        <!-- ══ IAM PERSONAS ══ -->
+
+        <mxCell id="director" value="&lt;b&gt;data-lake-director&lt;/b&gt;&lt;br&gt;SELECT * — 10 columns"
+          style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontColor=#0b3e82;fontSize=11;"
+          vertex="1" parent="1">
+          <mxGeometry x="44" y="1000" width="186" height="56" as="geometry" />
+        </mxCell>
+
+        <mxCell id="analyst" value="&lt;b&gt;data-lake-analyst&lt;/b&gt;&lt;br&gt;SELECT * — 8 columns"
+          style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontColor=#0b3e82;fontSize=11;"
+          vertex="1" parent="1">
+          <mxGeometry x="432" y="1000" width="186" height="56" as="geometry" />
+        </mxCell>
+
+        <!-- ══ LEFT SIDE ══ -->
+
+        <mxCell id="scripts" value="&lt;b&gt;S3 scripts bucket&lt;/b&gt;&lt;br&gt;ETL scripts | SSE-S3"
+          style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontColor=#2d6a2d;fontSize=11;"
+          vertex="1" parent="1">
+          <mxGeometry x="16" y="216" width="155" height="56" as="geometry" />
+        </mxCell>
+
+        <mxCell id="crawlers" value="&lt;b&gt;Glue crawlers x3&lt;/b&gt;&lt;br&gt;raw | curated | refined"
+          style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d6b656;fontColor=#7d4e00;fontSize=11;"
+          vertex="1" parent="1">
+          <mxGeometry x="16" y="574" width="155" height="56" as="geometry" />
+        </mxCell>
+
+        <!-- ══ RIGHT SIDE ══ -->
+
+        <mxCell id="kms" value="&lt;b&gt;KMS CMK&lt;/b&gt;&lt;br&gt;encrypts all 3 zones"
+          style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontColor=#8b1a1a;fontSize=11;"
+          vertex="1" parent="1">
+          <mxGeometry x="478" y="112" width="160" height="56" as="geometry" />
+        </mxCell>
+
+        <mxCell id="macie" value="&lt;b&gt;Amazon Macie&lt;/b&gt;&lt;br&gt;PII scanning&lt;br&gt;custom CIK identifier"
+          style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontColor=#8b1a1a;fontSize=11;"
+          vertex="1" parent="1">
+          <mxGeometry x="478" y="196" width="160" height="80" as="geometry" />
+        </mxCell>
+
+        <mxCell id="backup" value="&lt;b&gt;AWS Backup&lt;/b&gt;&lt;br&gt;daily | PITR | 3 zones&lt;br&gt;SLR + role exempted"
+          style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d0e8e5;strokeColor=#00897b;fontColor=#004d40;fontSize=11;"
+          vertex="1" parent="1">
+          <mxGeometry x="478" y="366" width="160" height="80" as="geometry" />
+        </mxCell>
+
+        <mxCell id="vault" value="&lt;b&gt;Backup vault&lt;/b&gt;&lt;br&gt;3 recovery points"
+          style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d0e8e5;strokeColor=#00897b;fontColor=#004d40;fontSize=11;"
+          vertex="1" parent="1">
+          <mxGeometry x="478" y="472" width="160" height="56" as="geometry" />
+        </mxCell>
+
+        <!-- ══ CLOUDFORMATION NOTE ══ -->
+
+        <mxCell id="cfnote" value="6 CloudFormation stacks: financial-data-lake-{s3, glue, iam, macie, backup, vpc}"
+          style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontSize=10;fontStyle=2;fontColor=#666666;"
+          vertex="1" parent="1">
+          <mxGeometry x="100" y="1080" width="450" height="30" as="geometry" />
+        </mxCell>
+
+        <!-- ══════════ EDGES ══════════ -->
+
+        <!-- EDGAR → Raw -->
+        <mxCell id="e1" value=""
+          style="edgeStyle=orthogonalEdgeStyle;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;"
+          edge="1" source="edgar" target="raw" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Raw → ETL1 -->
+        <mxCell id="e2" value=""
+          style="edgeStyle=orthogonalEdgeStyle;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;"
+          edge="1" source="raw" target="etl1" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- ETL1 → Curated -->
+        <mxCell id="e3" value=""
+          style="edgeStyle=orthogonalEdgeStyle;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;"
+          edge="1" source="etl1" target="curated" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Curated → ETL2 -->
+        <mxCell id="e4" value=""
+          style="edgeStyle=orthogonalEdgeStyle;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;"
+          edge="1" source="curated" target="etl2" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- ETL2 → Refined -->
+        <mxCell id="e5" value=""
+          style="edgeStyle=orthogonalEdgeStyle;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;"
+          edge="1" source="etl2" target="refined" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Refined → Catalog -->
+        <mxCell id="e6" value=""
+          style="edgeStyle=orthogonalEdgeStyle;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;"
+          edge="1" source="refined" target="catalog" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Catalog → Lake Formation -->
+        <mxCell id="e7" value=""
+          style="edgeStyle=orthogonalEdgeStyle;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;"
+          edge="1" source="catalog" target="lf" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Lake Formation → Athena -->
+        <mxCell id="e8" value=""
+          style="edgeStyle=orthogonalEdgeStyle;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;"
+          edge="1" source="lf" target="athena" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Athena → Director -->
+        <mxCell id="e9" value="10 cols"
+          style="edgeStyle=orthogonalEdgeStyle;html=1;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;fontSize=10;"
+          edge="1" source="athena" target="director" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Athena → Analyst -->
+        <mxCell id="e10" value="8 cols"
+          style="edgeStyle=orthogonalEdgeStyle;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;fontSize=10;"
+          edge="1" source="athena" target="analyst" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Backup → Vault -->
+        <mxCell id="e11" value="recovery points"
+          style="edgeStyle=orthogonalEdgeStyle;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;fontSize=10;"
+          edge="1" source="backup" target="vault" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- KMS → Raw (dashed) -->
+        <mxCell id="e12" value="encrypts"
+          style="edgeStyle=orthogonalEdgeStyle;html=1;dashed=1;strokeColor=#b85450;fontColor=#b85450;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;fontSize=10;"
+          edge="1" source="kms" target="raw" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Macie → Raw (dashed) -->
+        <mxCell id="e13" value="PII scan"
+          style="edgeStyle=orthogonalEdgeStyle;html=1;dashed=1;strokeColor=#b85450;fontColor=#b85450;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;fontSize=10;"
+          edge="1" source="macie" target="raw" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Scripts → ETL1 (dashed) -->
+        <mxCell id="e14" value="ScriptLocation"
+          style="edgeStyle=orthogonalEdgeStyle;html=1;dashed=1;strokeColor=#82b366;fontColor=#2d6a2d;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;fontSize=10;"
+          edge="1" source="scripts" target="etl1" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Crawlers → Catalog (dashed) -->
+        <mxCell id="e15" value="catalogs all zones"
+          style="edgeStyle=orthogonalEdgeStyle;html=1;dashed=1;strokeColor=#d6b656;fontColor=#7d4e00;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;fontSize=10;"
+          edge="1" source="crawlers" target="catalog" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
