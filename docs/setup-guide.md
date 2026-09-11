@@ -8,7 +8,7 @@ This guide documents the exact steps to deploy this project from scratch in a fr
 - AWS CLI v2 installed and configured (`aws configure --profile personal`)
 - Python 3.10+ with `boto3` and `pandas` installed
 - Git installed and configured
-- Estimated cost: under $15 for a full build-and-teardown cycle (see Cost Breakdown below)
+- Estimated cost: under $5 for a full build-and-teardown cycle (see Cost Breakdown below)
 
 ## Deployment Order
 
