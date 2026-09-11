@@ -82,6 +82,6 @@ See [docs/setup-guide.md](docs/setup-guide.md)
 Running this project at portfolio scale with small dataset: under $15/month. Destroy all resources after each session using the teardown script to minimise cost.
 
 ## Author
-Akshay | AWS Solutions Architect | 
+Akshay Salunke| AWS Solutions Architect | 
 MSc Financial Technology | 
 [LinkedIn]https://linkedin.com/in/akshayksalunke
