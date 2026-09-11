@@ -84,4 +84,4 @@ Running this project at portfolio scale with small dataset: under $15/month. Des
 ## Author
 Akshay | AWS Solutions Architect | 
 MSc Financial Technology | 
-[Your LinkedIn URL]
+[LinkedIn]https://linkedin.com/in/akshayksalunke
