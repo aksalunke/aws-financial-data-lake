@@ -209,3 +209,44 @@ Scripts bucket: raw_to_curated.py was stored in the raw zone bucket since Phase 
 Glue job under CloudFormation: the raw-to-curated job was created via CLI and was not reproducible via stack teardown and redeploy. It is now defined in financial-data-lake-glue.yaml alongside the new curated-to-refined job.
 
 Glue role split: implemented as part of this extension — see ADR #4.
+
+## 14. Governed RAG retrieval — storage, authorization, and network placement
+
+What this ADR covers:
+The Bedrock RAG extension adds retrieval over real, unstructured 10-K filing text — a workload Lake Formation cannot reach. Lake Formation's enforcement is wired into Glue-Catalog-aware query engines (Athena, Redshift Spectrum, EMR, and Bedrock's separate structured-data-retrieval mode via Redshift); the vector-mode Bedrock Knowledge Base used for genuine text RAG never touches the Glue Catalog, so the existing director/analyst column grants have no bridge into this workload. This ADR documents the storage, authorization, and network placement decisions that follow from that gap.
+
+Decision 1: S3 Vectors over OpenSearch Serverless as the vector store
+OpenSearch Serverless, the default Bedrock Knowledge Base vector store, bills a minimum of 2 OCUs for indexing plus 2 for search continuously — roughly $700/month at standard rates regardless of query volume — and the underlying collection continues billing after the Knowledge Base itself is deleted unless removed separately. Amazon S3 Vectors reached general availability December 2, 2025, cuts vector storage and query costs by up to 90% versus a dedicated vector store, and is a native Bedrock Knowledge Base storage backend with its own CloudFormation resource types (AWS::S3Vectors::VectorBucket, AWS::S3Vectors::Index) — no custom resource required.
+
+Trade-off accepted: S3 Vectors is a newer service (GA'd within the last year) with less community troubleshooting history than OpenSearch.
+Trade-off avoided: a persistent compute cost disproportionate to a personal-account portfolio project, and the risk of an orphaned, still-billing collection after teardown.
+
+Decision 2: application-layer metadata filtering, not native RBAC
+Bedrock Knowledge Bases has no built-in RBAC on the vector retrieval path — AWS's own documentation states RBAC for knowledge bases is a Kendra capability, and Bedrock offers metadata filtering only, described as a baseline capability rather than strong authorization. Chunks are tagged permission_level: public or restricted via per-document .metadata.json sidecars at ingestion (every chunk of a document inherits its source document's tag). A single Lambda is the only principal permitted to call Retrieve/RetrieveAndGenerate — it resolves the caller's assumed IAM role (director or analyst, via the same STS AssumeRole mechanism already proven at the Lake Formation layer) and attaches the corresponding filter server-side. The caller never supplies their own filter.
+
+Two alternatives were considered and rejected:
+S3 Access Grants — AWS's own reference pattern still requires application code to enumerate list_caller_access_grants and discard unauthorised chunks after the Knowledge Base has already returned them unfiltered; it relocates where the policy is stored, not who enforces it, and adds an IAM Identity Center dependency disproportionate to two personas already proven via STS.
+Bedrock Managed Knowledge Base — AWS's current platform-enforced answer and the direct successor to Amazon Kendra, which entered maintenance mode June 30, 2026. Not used here because its S3-connector ACL mechanism for a caller-populated corpus isn't documented anywhere confirmable, its CloudFormation support was visibly unstable within weeks of its June 17, 2026 GA, and it fully manages the vector store — removing the ability to inspect or drift-check it, against this project's established discipline of owning every layer via CloudFormation.
+
+Trade-off accepted: this is a caller-supplied filter, not a platform guarantee. Nothing downstream of the Lambda independently verifies its role-to-filter mapping — if that mapping is ever wrong, there is no second layer to catch it, unlike Lake Formation.
+Trade-off avoided: the IAM Identity Center / OIDC infrastructure S3 Access Grants would require, and the unproven, fully-managed surface of Bedrock Managed Knowledge Base.
+
+Decision 3: no VPC restriction on the KB source or vector buckets
+Both new S3 resources — the plain source bucket holding chunked text and .metadata.json sidecars, and the S3 Vectors vector bucket — are IAM-governed only, with no VPC endpoint of either kind. Checked, not assumed: S3 Vectors does support VPC access via an Interface Endpoint (PrivateLink), contrary to an initial assumption of no VPC path at all — but it cannot use the free Gateway Endpoint the raw/curated zones already use, since Gateway Endpoints only ever cover S3 and DynamoDB. Extending network enforcement here would mean standing up a second, differently-billed, differently-enforced control to protect content with no real sensitivity — the real corpus is honestly public 10-K text, and the synthetic fixtures (see ADR #15) are fake data by design. Same rationale already established for the refined zone in ADR #13.
+
+Documented limitations:
+The security guarantee here is weaker in kind than Lake Formation's, and that is a permanent property of this design, not a gap to close later. The deny-path test suite against the synthetic fixtures (ADR #15) is the only check standing in for the platform-level guarantee this design does not have.
+
+Production fix: revisit if the corpus, user base, or compliance requirements grow past what two hardcoded personas can honestly represent. Bedrock Managed Knowledge Base's ACL model, once its S3 mechanics and CloudFormation support are fully mature, is the more defensible production path at that point.
+
+## 15. Synthetic restricted test fixtures
+
+The real corpus is entirely genuine, public 10-K text — every real chunk is honestly tagged permission_level: public for both personas. This is accurate, but it means the real corpus alone cannot prove the deny path in ADR #14 actually works: there is no restricted content in it that could wrongly leak. A control never exercised in the negative case is assumed, not proven.
+
+Two small, wholly synthetic documents are added as permission_level: restricted, ingested through a separate AWS::Bedrock::DataSource pointed at a separate S3 prefix (test-fixtures/, distinct from the real corpus's filings/) — a genuinely separate ingestion job, not just a different folder under the same source. Content is deliberately boring and self-describing: fictional entity names, identifiers in an unmistakably fake format (SYNTHETIC-CIK-0000000001, not a real-shaped CIK), a plainly stated purpose written into the document body itself, and no attempt to simulate real sensitive financial material. Each fixture carries one distinctive, wholly fictional term (Glenbarrow Ratio, Project Thistlewood) specific enough that a semantic search for it has no legitimate reason to match anything else in the corpus — this is what makes the eventual deny-path test meaningful rather than trivially true, since the content is genuinely retrievable in principle and excluded only because the permission filter is doing its job.
+
+Note: folder separation from the real corpus is not required by the enforcement mechanism itself — permission_level alone determines access, regardless of location. It is a second, independent safeguard against a different risk: future tooling built for the real corpus (cleanup scripts, integrity checks against the curated table) accidentally treating the fixtures as real data to validate or prune, since their identifiers are deliberately fake and would fail any such check. Separate prefixes and a separate Data Source mean that tooling never has a path to the fixtures in the first place.
+
+An additional synthetic: true metadata field is included beyond permission_level, as an independent second marker — cheap insurance that makes it possible to audit or exclude these fixtures by an entirely separate signal if permission_level itself is ever the thing under test.
+
+Production fix: the eventual pytest suite queries the ADR #14 Lambda under the analyst persona using each fixture's hook term and asserts zero results, then repeats under the director persona and asserts the fixture is returned — proving the filter distinguishes personas correctly, not just that it blocks indiscriminately. This can only be written once the retrieval Lambda exists.

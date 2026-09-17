@@ -288,3 +288,27 @@ detect-stack-drift run across all six stacks after the full VPC Access Points bu
 financial-data-lake-s3: IN_SYNC financial-data-lake-glue: IN_SYNC financial-data-lake-iam: IN_SYNC financial-data-lake-macie: DRIFTED (second occurrence of FindingsFilter false positive — see above) financial-data-lake-backup: IN_SYNC financial-data-lake-vpc: IN_SYNC
 
 Five stacks IN_SYNC confirms the VPC infrastructure, Glue role split, scripts bucket, curated-to-refined job, refined zone crawler, and bucket policy enforcement were all made at the template layer. Macie drift status is a repeated platform limitation, not an actionable gap.
+
+## Phase 11 — JPMorgan Item 8 heading is a cross-reference, not a section boundary
+
+While reviewing extracted text for JPMorgan's real 10-K, a raw-to-text conversion flattened a balance sheet table into a sequence of unlabelled row values — label, then value, then value, on separate lines with no column headers repeated. Considered trimming the extracted text at the "Item 8." heading to exclude the financial statements section, on the assumption this would remove the degraded tabular content while preserving the clean narrative sections.
+
+Root cause: grep across the document for `^Item [0-9]` showed Item 7 through Item 9 all clustered within about 15 lines of each other, around line 11,449 of a 50,919-line file. Inspecting those lines directly showed Item 7's entry is a single cross-reference sentence — "Management's discussion and analysis... appears on pages 46-160" — not the actual section content. The real MD&A and financial statements content is present later in the same document, introduced by natural subsection headings (e.g. "CONSOLIDATED BALANCE SHEETS AND CASH FLOWS ANALYSIS" at line 13,012) rather than a repeated "Item 8." label.
+
+Resolution: did not implement the trim. Cutting at the first match of "Item 8." would have discarded approximately 97% of the real content, including the genuine Item 1A Risk Factors section (confirmed at 15,521 words of real narrative) and the entire MD&A and financial statements sections. The document is ingested in full; table-flattening is accepted as a documented limitation rather than worked around with an unreliable heading match.
+
+Lesson: a section heading appearing once in a document is not evidence of where that section's real content begins. Large bank 10-Ks front-load a compact item summary with cross-reference sentences before the substantive sections restart under their own natural subsection titles.
+
+## Phase 12 — iXBRL raw-to-extracted text ratio: two wrong theories before the real answer
+
+edgar_fetch.py extracts real 10-K text by stripping HTML with BeautifulSoup. Tested against two real companies — JPMorgan Chase (12,927,325 raw HTML characters received) and Goldman Sachs (9,611,165 raw HTML characters received) — extracted text came out to roughly 11-14% of raw size in both cases (1,431,829 and 1,298,580 characters). An 86-90% reduction looked too large to be ordinary markup stripping.
+
+First theory, ruled out: suspected Goldman's audited financial statements lived in a separate document within the same EDGAR filing package. Fetched the actual filing index directly — `gs-20251231.htm` (9,611,165 bytes) is the sole, complete 10-K document in the package. No separate financial-statements exhibit exists.
+
+Second theory, ruled out: suspected html.parser was mishandling the document's inline XBRL namespace tags (e.g. `<ix:nonFraction>`). Tested three parser configurations against both real filings — html.parser, BeautifulSoup with lxml in HTML mode, and BeautifulSoup with lxml in genuine XML mode (features="xml") — all three produced byte-for-byte identical extracted text on both companies, every time. Parser choice was never the variable.
+
+The actual answer: measured total characters living inside `<script>` and `<style>` tags before they're stripped. Result: zero, on both filings. The remaining explanation was correct: iXBRL filings are extremely attribute-heavy relative to visible text — every tagged figure is wrapped in a verbose attribute set (contextRef, unitRef, decimals, scale, name...) that get_text() never counts, since it only reads text nodes. A document this densely tagged was always going to compress to a small fraction of its raw byte count. Nothing was lost; extraction was correct from the first version.
+
+Resolution: reverted to html.parser — proven empirically equivalent to both lxml modes, and more lenient toward malformed markup on filers not yet tested. Both diagnostics (raw-bytes-vs-decoded-text, script/style character count) kept permanently in the script rather than removed, since they cost nothing and will immediately surface it if some future filer's document genuinely does hide content.
+
+Lesson: two plausible theories, each closed off by an actual measurement rather than accepted on reasoning alone, ending in "confirmed there's no bug" rather than an unnecessary rewrite.
