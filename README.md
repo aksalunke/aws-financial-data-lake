@@ -74,7 +74,10 @@ See [docs/setup-guide.md](docs/setup-guide.md)
 ## Estimated AWS Cost
 Under $5 for a full build-test-teardown cycle (see `docs/setup-guide.md` for the itemized breakdown). If resources are left running, the only meaningful ongoing cost is ~$2/month for the two KMS CMKs. Destroy all resources after each session using the teardown script to avoid that charge accumulating.
 
+## Roadmap
+Next: governed RAG over the curated zone using Bedrock Knowledge Bases — in progress on `feature/bedrock-rag-extension`.
+
 ## Author
-Akshay Salunke| AWS Solutions Architect | 
-MSc Financial Technology | 
-[LinkedIn]https://linkedin.com/in/akshayksalunke
+Akshay Salunke| AWS Solutions Architect | MSc Financial Technology | [LinkedIn]https://linkedin.com/in/akshayksalunke
+
+© 2026 Akshay Salunke. All rights reserved. This code is shared for portfolio and demonstration purposes only; no license is granted for reuse, modification, or redistribution.
